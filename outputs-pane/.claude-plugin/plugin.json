@@ -1,0 +1,18 @@
+{
+  "name": "outputs-pane",
+  "version": "0.2.0",
+  "description": "Side pane listing files Claude writes or edits, split into planning and code; click one to open it in your editor",
+  "author": { "name": "Russell Pope", "url": "https://github.com/russellpope" },
+  "homepage": "https://github.com/russellpope/claude-mods/tree/main/outputs-pane",
+  "repository": "https://github.com/russellpope/claude-mods",
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "editor": {
+      "type": "string",
+      "title": "Editor command",
+      "description": "Command that opens a clicked file; the path is added as the last argument (e.g. zed, code -r, subl, /usr/local/bin/zed)",
+      "default": "zed"
+    }
+  }
+}
