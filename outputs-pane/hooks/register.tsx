@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { OutputFile } from '../types'
+import type { OutputFile, Section } from '../types'
 import { iconFor } from './icons'
 
 const PANE = 'outputs'
@@ -9,29 +9,41 @@ const TITLE = 'Outputs'
 // Requested size only: a dock width the person dragged or keyed (pluginPanes.dockColumns) wins.
 const SIZE = { columns: 36, rows: 10 }
 const DEFAULT_EDITOR = 'zed'
+const DEFAULT_SCRATCH = 'msg-*'
 const ACCENT = '#61afef'
 const NEW = '#98c379'
 const EDIT = '#e5c07b'
 const HOVER_BG = '#2c313c'
 const files = atom({ plugin: 'outputs-pane', key: 'files' } as const, [])
-const folded = atom({ plugin: 'outputs-pane', key: 'folded' } as const, [])
+const folded = atom({ plugin: 'outputs-pane', key: 'folded' } as const, ['scratch'])
+const query = atom({ plugin: 'outputs-pane', key: 'query' } as const, '')
 
-export type Section = 'planning' | 'code'
 const SECTIONS: { id: Section; label: string; glyph: string; color: string }[] = [
-  { id: 'planning', label: 'planning', glyph: '\uf0eb', color: '#c678dd' },
-  { id: 'code', label: 'code', glyph: '\uf121', color: '#56b6c2' },
+  { id: 'planning', label: 'planning', glyph: '', color: '#c678dd' },
+  { id: 'code', label: 'code', glyph: '', color: '#56b6c2' },
+  { id: 'scratch', label: 'scratch', glyph: '', color: '#7a7f88' },
 ]
 const PLANNING = /\.(md|mdx|markdown|txt)$/i
 
-export const sectionOf = (path: string): Section => (PLANNING.test(path) ? 'planning' : 'code')
+// One glob of the scratch setting, matched against a file name: * and ? are wildcards, the rest is literal.
+const globToRegExp = (glob: string) =>
+  new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i')
 
-// Rows per section: planning takes up to half, code takes what planning leaves.
-export const budget = (planning: number, code: number, shut: readonly Section[], room: number) => {
-  const plan = shut.includes('planning') ? 0 : Math.min(planning, Math.max(1, Math.ceil(room / 2)))
-  const rest = shut.includes('code') ? 0 : Math.min(code, Math.max(1, room - plan))
+// The scratch setting is a comma-separated list of globs: blank means none, unset means msg-*.
+export const scratchPatterns = (setting: unknown) =>
+  (typeof setting === 'string' ? setting : DEFAULT_SCRATCH)
+    .split(',').map(glob => glob.trim()).filter(Boolean).map(globToRegExp)
 
-  return { planning: plan, code: rest }
+// A scratch name wins over the extension; then markdown and text are planning, the rest code.
+export const sectionOf = (path: string, scratch: readonly RegExp[] = []): Section => {
+  const name = path.split('/').pop() ?? path
+  if (scratch.some(pattern => pattern.test(name))) return 'scratch'
+
+  return PLANNING.test(path) ? 'planning' : 'code'
 }
+
+// The filter matches the path as the pane shows it; a blank filter matches everything.
+export const matches = (shown: string, typed: string) => shown.toLowerCase().includes(typed.trim().toLowerCase())
 
 // Newest first, one row per path; a file Claude created stays 'new' after later edits.
 export const remember = (list: OutputFile[], path: string, kind: OutputFile['kind'], at: number) => {
@@ -66,7 +78,7 @@ export const editorArgv = (setting: unknown, path: string) => {
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'outputs', description: 'Show files written this session (click to open in Zed)' })
+    await $.command.register({ name: 'outputs', description: 'Show files written this session (click to open in your editor)' })
     void openPane($).catch(() => undefined)
 
     return next(e)
@@ -98,12 +110,16 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button } = elements
+    // The mobile app draws no Input yet; there the pane goes without the filter.
+    const Input = 'Input' in elements ? elements.Input : undefined
     const list = await read($, files)
     const cwd = await $.session.cwd()
     const home = cwd.match(/^\/(Users|home)\/[^/]+/)?.[0] ?? ''
-    const height = e.viewport?.rows ?? 24
     const shut = await read($, folded)
+    const typed = await read($, query)
+    const scratch = scratchPatterns(options.scratch)
 
     const editor = editorArgv(options.editor, '')[0]?.split('/').pop() ?? DEFAULT_EDITOR
 
@@ -111,16 +127,34 @@ export const register: Register = (on, options) => {
       const argv = editorArgv(options.editor, path)
       const ran = await $.process.run(argv).catch((error: unknown) => ({ exitCode: -1, stderr: String(error) }))
       const { exitCode, stderr } = ran
-      $.ui.toast(exitCode === 0 ? `${editor} \u2190 ${shorten(path, cwd, home)}` : `${editor} failed: ${stderr.slice(0, 80)}`)
+      $.ui.toast(exitCode === 0 ? `${editor} ← ${shorten(path, cwd, home)}` : `${editor} failed: ${stderr.slice(0, 80)}`)
     }
 
+    // Matches for a filter, in the order the sections draw them.
+    const hitsFor = (text: string) => SECTIONS.flatMap(section =>
+      list.filter(file => sectionOf(file.path, scratch) === section.id && matches(shorten(file.path, cwd, home), text)))
 
-    const room = Math.max(2, height - 10)
+    const filter = (text: string) => void update($, query, () => text)
+      .then(() => $.ui.scroll({ in: PANE, to: 'start' }))
+      .catch(() => undefined)
+
+    // Enter opens the first match, a folded section's included.
+    const openFirst = async (text: string) => {
+      await update($, query, () => text)
+      const first = hitsFor(text)[0]
+      if (first) await open(first.path)
+      else $.ui.toast(`no file matches ${text.trim()}`)
+    }
+
+    const isFiltering = typed.trim() !== ''
+    const hits = hitsFor(typed)
     const created = list.filter(file => file.kind === 'new').length
-    const rows = budget(
-      list.filter(file => sectionOf(file.path) === 'planning').length,
-      list.filter(file => sectionOf(file.path) === 'code').length,
-      shut, room)
+    // Scratch shows only once something lands in it; a filter hides the sections it empties.
+    const drawn = SECTIONS.filter(section => {
+      const count = hits.filter(file => sectionOf(file.path, scratch) === section.id).length
+
+      return count > 0 || (!isFiltering && section.id !== 'scratch')
+    })
 
     return (
       <Box flexDirection="column" paddingX={1}>
@@ -128,7 +162,8 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" justifyContent="space-between" alignItems="center" marginBottom={1}>
             <Text bold color={ACCENT}>{''}  outputs</Text>
             <Box flexDirection="row" flexShrink={0}>
-              {list.length > 0 && (
+              {list.length > 0 && isFiltering && <Text dimColor>{`${hits.length} of ${list.length}`}</Text>}
+              {list.length > 0 && !isFiltering && (
                 <Text>
                   <Text color={NEW}>{''} {created}</Text>
                   <Text dimColor>  </Text>
@@ -138,6 +173,13 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
 
+          {list.length > 0 && Input && (
+            <Box marginBottom={1}>
+              <Input key="filter" label={' '} placeholder="filter" value={typed} submitLabel="open"
+                onInput={filter} onSubmit={text => void openFirst(text)} />
+            </Box>
+          )}
+
           {list.length === 0 && (
             <Box flexDirection="column" alignItems="center" marginTop={1}>
               <Text dimColor>{''}  nothing written yet</Text>
@@ -145,22 +187,21 @@ export const register: Register = (on, options) => {
             </Box>
           )}
 
-          {list.length > 0 && SECTIONS.map(section => {
-            const inSection = list.filter(file => sectionOf(file.path) === section.id)
+          {list.length > 0 && drawn.map(section => {
+            const inSection = hits.filter(file => sectionOf(file.path, scratch) === section.id)
             const isShut = shut.includes(section.id)
-            const shown = inSection.slice(0, rows[section.id])
             const toggle = () => void update($, folded, now =>
               now.includes(section.id) ? now.filter(id => id !== section.id) : [...now, section.id])
 
             return (
               <Box flexDirection="column" key={`section:${section.id}`} marginBottom={1}>
                 <Box flexDirection="row" key={`head:${section.id}`} hover={{ backgroundColor: HOVER_BG }}>
-                  <Text color={section.color}>{isShut ? '\uf105' : '\uf107'} {section.glyph} </Text>
+                  <Text color={section.color}>{isShut ? '' : ''} {section.glyph} </Text>
                   <Button plain key={`fold:${section.id}`} label={section.label} hover={{ color: section.color, bold: true }} onPress={toggle} />
                   <Text dimColor> {inSection.length}</Text>
                 </Box>
                 {!isShut && inSection.length === 0 && <Text dimColor italic>    none yet</Text>}
-                {shown.map(file => {
+                {!isShut && inSection.map(file => {
                   const icon = iconFor(file.path)
                   const { dir, name } = splitPath(shorten(file.path, cwd, home))
 
@@ -168,7 +209,7 @@ export const register: Register = (on, options) => {
                     <Box flexDirection="row" key={`row:${file.path}`} hover={{ backgroundColor: HOVER_BG }}>
                       <Box flexShrink={0}>
                         <Text>  </Text>
-                        <Text color={file.kind === 'new' ? NEW : EDIT}>{file.kind === 'new' ? '\uf457 ' : '\uf459 '}</Text>
+                        <Text color={file.kind === 'new' ? NEW : EDIT}>{file.kind === 'new' ? ' ' : ' '}</Text>
                         <Text color={icon.color}>{icon.glyph} </Text>
                       </Box>
                       <Box flexGrow={1} flexShrink={1} flexDirection="row" overflow="hidden">
@@ -181,7 +222,6 @@ export const register: Register = (on, options) => {
                     </Box>
                   )
                 })}
-                {!isShut && inSection.length > shown.length && <Text dimColor italic>    {'\u2026'} {inSection.length - shown.length} more</Text>}
               </Box>
             )
           })}
@@ -189,7 +229,7 @@ export const register: Register = (on, options) => {
 
         {list.length > 0 && (
           <Box marginTop={1}>
-            <Text dimColor wrap="truncate-end">{'\uf245'} click a name for {editor}</Text>
+            <Text dimColor wrap="truncate-end">{''} click a name for {editor}</Text>
           </Box>
         )}
       </Box>

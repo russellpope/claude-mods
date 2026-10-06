@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { iconFor } from './icons'
-import { budget, editorArgv, remember, sectionOf, shorten, splitPath } from './register'
+import { editorArgv, matches, remember, scratchPatterns, sectionOf, shorten, splitPath } from './register'
 
 describe('remember', () => {
   test('newest first, deduped, created files stay new', () => {
@@ -55,11 +55,35 @@ describe('sections', () => {
     expect(sectionOf('/w/README')).toBe('code')
   })
 
-  test('planning takes up to half the rows, code the rest; a folded section takes none', () => {
-    expect(budget(1, 20, [], 10)).toEqual({ planning: 1, code: 9 })
-    expect(budget(20, 20, [], 10)).toEqual({ planning: 5, code: 5 })
-    expect(budget(20, 20, ['planning'], 10)).toEqual({ planning: 0, code: 10 })
-    expect(budget(3, 2, ['code'], 10)).toEqual({ planning: 3, code: 0 })
+  test('a name matching a scratch pattern is scratch, whatever its extension or folder', () => {
+    const scratch = scratchPatterns('msg-*')
+    expect(sectionOf('/Users/me/gate-logs/msg-merge-p2a.txt', scratch)).toBe('scratch')
+    expect(sectionOf('/w/.superpowers/sdd/MSG-PKG.TXT', scratch)).toBe('scratch')
+    expect(sectionOf('/w/msg-notes/plan.md', scratch)).toBe('planning')
+    expect(sectionOf('/w/src/main.rs', scratch)).toBe('code')
+  })
+})
+
+describe('scratchPatterns', () => {
+  test('a comma-separated list of globs; * and ? are wildcards, the rest is literal', () => {
+    const scratch = scratchPatterns('msg-*, v?.log')
+    expect(sectionOf('/w/v1.log', scratch)).toBe('scratch')
+    expect(sectionOf('/w/v12.log', scratch)).toBe('code')
+    expect(sectionOf('/w/v1xlog', scratch)).toBe('code')
+  })
+
+  test('blank means no scratch; unset means the default msg-*', () => {
+    expect(sectionOf('/w/msg-a.txt', scratchPatterns(''))).toBe('planning')
+    expect(sectionOf('/w/msg-a.txt', scratchPatterns(undefined))).toBe('scratch')
+  })
+})
+
+describe('matches', () => {
+  test('the shown path holds the query, ignoring case and spaces around it; blank matches all', () => {
+    expect(matches('docs/I343-plan.md', 'i343')).toBe(true)
+    expect(matches('~/gate-logs/msg-a.txt', ' gate-logs ')).toBe(true)
+    expect(matches('src/main.rs', 'plan')).toBe(false)
+    expect(matches('src/main.rs', '  ')).toBe(true)
   })
 })
 
@@ -132,6 +156,83 @@ describe('pane', () => {
     const ui = await $.ui.mount({ plugin: 'outputs-pane', surface: 'terminal', component: 'Pane', props: {} as never, requestId: 'outputs' })
     await ui.press({ key: 'open:/Users/me/p/x.rs' })
     expect(ran).toEqual([['code', '-r', '/Users/me/p/x.rs']])
+  })
+
+  test('a scratch file lands in a scratch section that starts folded', async ($, on) => {
+    on('tool.call', () => ({ result: 'ok' } as never))
+    on('session.cwd', () => ({ value: '/Users/me/p' }))
+    on('ui.open', () => ({ value: { isPlaced: true } } as never))
+
+    await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/gate-logs/msg-merge.txt', content: 'm' })
+    await $.tool.call({ tool: 'Write', tool_use_id: 't2', file_path: '/Users/me/p/notes.txt', content: 'n' })
+    const ui = await $.ui.mount({ plugin: 'outputs-pane', surface: 'terminal', component: 'Pane', props: {} as never, requestId: 'outputs' })
+    expect(await ui.findAll({ type: 'Button', text: 'notes.txt' })).toHaveLength(1)
+    expect(await ui.findAll({ type: 'Button', text: 'msg-merge.txt' })).toHaveLength(0)
+
+    await ui.press({ key: 'fold:scratch' })
+    expect(await ui.findAll({ type: 'Button', text: 'msg-merge.txt' })).toHaveLength(1)
+  })
+
+  test('the scratch setting decides what counts as scratch', { options: { scratch: '*.log' } }, async ($, on) => {
+    on('tool.call', () => ({ result: 'ok' } as never))
+    on('session.cwd', () => ({ value: '/Users/me/p' }))
+    on('ui.open', () => ({ value: { isPlaced: true } } as never))
+
+    await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/p/gate.log', content: 'g' })
+    await $.tool.call({ tool: 'Write', tool_use_id: 't2', file_path: '/Users/me/p/msg-a.txt', content: 'm' })
+    const ui = await $.ui.mount({ plugin: 'outputs-pane', surface: 'terminal', component: 'Pane', props: {} as never, requestId: 'outputs' })
+    expect(await ui.findAll({ type: 'Button', text: 'gate.log' })).toHaveLength(0)
+    expect(await ui.findAll({ type: 'Button', text: 'msg-a.txt' })).toHaveLength(1)
+  })
+
+  test('every file is drawn, with no cut-off, however short the pane', async ($, on) => {
+    on('tool.call', () => ({ result: 'ok' } as never))
+    on('session.cwd', () => ({ value: '/Users/me/p' }))
+    on('ui.open', () => ({ value: { isPlaced: true } } as never))
+
+    for (let i = 0; i < 30; i++) {
+      await $.tool.call({ tool: 'Write', tool_use_id: `t${i}`, file_path: `/Users/me/p/src/f${i}.rs`, content: 'x' })
+    }
+    const ui = await $.ui.mount({ plugin: 'outputs-pane', surface: 'terminal', component: 'Pane', props: {} as never, requestId: 'outputs', viewport: { columns: 36, rows: 12 } } as never)
+    const rows = (await ui.findAll({ type: 'Button' })).filter(found => found.key?.startsWith('open:'))
+    expect(rows).toHaveLength(30)
+    expect(await ui.findAll({ text: /more/ })).toHaveLength(0)
+  })
+
+  test('typing in the filter narrows the list and counts the matches', async ($, on) => {
+    on('tool.call', () => ({ result: 'ok' } as never))
+    on('session.cwd', () => ({ value: '/Users/me/p' }))
+    on('ui.open', () => ({ value: { isPlaced: true } } as never))
+    on('ui.scroll', () => ({ value: {} } as never))
+
+    await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/p/docs/I343-plan.md', content: '# p' })
+    await $.tool.call({ tool: 'Write', tool_use_id: 't2', file_path: '/Users/me/p/src/main.rs', content: 'fn main() {}' })
+    const ui = await $.ui.mount({ plugin: 'outputs-pane', surface: 'terminal', component: 'Pane', props: {} as never, requestId: 'outputs' })
+
+    await ui.input({ key: 'filter', text: 'i343', kind: 'change' })
+    expect(await ui.findAll({ type: 'Button', text: 'I343-plan.md' })).toHaveLength(1)
+    expect(await ui.findAll({ type: 'Button', text: 'main.rs' })).toHaveLength(0)
+    expect(await ui.findAll({ text: '1 of 2' })).not.toHaveLength(0)
+
+    await ui.input({ key: 'filter', text: '', kind: 'change' })
+    expect(await ui.findAll({ type: 'Button', text: 'main.rs' })).toHaveLength(1)
+  })
+
+  test('Enter in the filter opens the first match', async ($, on) => {
+    const ran: string[][] = []
+    on('tool.call', () => ({ result: 'ok' } as never))
+    on('session.cwd', () => ({ value: '/Users/me/p' }))
+    on('ui.open', () => ({ value: { isPlaced: true } } as never))
+    on('ui.scroll', () => ({ value: {} } as never))
+    on('process.run', (_$, e) => { ran.push([...e.argv]); return { value: { exitCode: 0, stdout: '', stderr: '' } } as never })
+    on('ui.toast', () => ({ value: undefined }))
+
+    await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/p/docs/plan.md', content: '# p' })
+    await $.tool.call({ tool: 'Write', tool_use_id: 't2', file_path: '/Users/me/p/src/main.rs', content: 'fn main() {}' })
+    const ui = await $.ui.mount({ plugin: 'outputs-pane', surface: 'terminal', component: 'Pane', props: {} as never, requestId: 'outputs' })
+
+    await ui.input({ key: 'filter', text: 'MAIN' })
+    expect(ran).toEqual([['zed', '/Users/me/p/src/main.rs']])
   })
 
   test('a failed write is not listed', async ($, on) => {
