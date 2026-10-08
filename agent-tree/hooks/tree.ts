@@ -12,12 +12,13 @@ const ROLES: [Role, RegExp][] = [
 
 export const roleOf = (name: string): Role => ROLES.find(([, re]) => re.test(name.toLowerCase()))?.[0] ?? 'other'
 
+// herdr's `done` only says a turn ended. Finished work is a `DONE:` title (or a gone pane).
 export const statusOf = (a: HerdrAgent | null): NodeStatus => {
   if (!a) return 'gone'
   if (a.status === 'blocked') return 'blocked'
   if (a.status === 'working') return 'working'
-  if (a.status === 'done' || /^DONE:/i.test(a.title)) return 'done'
   if (/^BLOCKED:/i.test(a.title)) return 'blocked'
+  if (/^DONE:/i.test(a.title)) return 'done'
   return 'idle'
 }
 

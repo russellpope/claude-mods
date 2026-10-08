@@ -38,14 +38,19 @@ describe('roleOf', () => {
 })
 
 describe('statusOf', () => {
-  test('herdr status first, then the DONE:/BLOCKED: title; working beats an old DONE title', () => {
+  test('blocked, then a BLOCKED: title, then working, then a DONE: title; working beats an old DONE title', () => {
     expect(statusOf(null)).toBe('gone')
     expect(statusOf(ag('a', { status: 'blocked' }))).toBe('blocked')
     expect(statusOf(ag('a', { status: 'working', title: 'DONE: old' }))).toBe('working')
     expect(statusOf(ag('a', { status: 'idle', title: 'DONE: merged' }))).toBe('done')
-    expect(statusOf(ag('a', { status: 'done' }))).toBe('done')
     expect(statusOf(ag('a', { status: 'idle', title: 'BLOCKED: owner call' }))).toBe('blocked')
     expect(statusOf(ag('a', { status: 'unknown' }))).toBe('idle')
+  })
+
+  test("herdr's done only means a turn ended: the worker is idle, or still blocked", () => {
+    expect(statusOf(ag('a', { status: 'done' }))).toBe('idle')
+    expect(statusOf(ag('a', { status: 'done', title: 'BLOCKED: nxom ask_owner' }))).toBe('blocked')
+    expect(statusOf(ag('a', { status: 'done', title: 'DONE: merged' }))).toBe('done')
   })
 })
 
@@ -111,7 +116,7 @@ describe('buildTree', () => {
 describe('partition', () => {
   test('finished = done or gone with nothing live below; a lead with live workers stays in the tree', () => {
     const edges = [edge('R', 'L', 1), edge('L', 'W1', 2), edge('R', 'D', 3)]
-    const { nodes } = build(edges, [ag('L', { status: 'idle', title: 'DONE: x' }), ag('W1'), ag('D', { status: 'done' })])
+    const { nodes } = build(edges, [ag('L', { status: 'idle', title: 'DONE: x' }), ag('W1'), ag('D', { status: 'done', title: 'DONE: shipped' })])
     const { tree, finished } = partition(nodes)
     expect(tree.map(n => n.pane)).toEqual(['L', 'W1'])
     expect(finished.map(n => n.pane)).toEqual(['D'])

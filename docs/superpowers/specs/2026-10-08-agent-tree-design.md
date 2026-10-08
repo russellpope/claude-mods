@@ -70,7 +70,7 @@ agent-tree · kintsugi (w9:pR)          [Tree | All]
 
 (The crab above is a placeholder; the sprite is drawn in implementation.)
 
-- **Status glyphs:** `●` working, `◌` idle, `!` blocked (herdr `blocked` or a `BLOCKED:` title), `✓` done (herdr `done` or a `DONE:` title), `✗` pane gone. A gone pane keeps its last known numbers.
+- **Status glyphs:** `●` working, `◌` idle, `!` blocked (herdr `blocked` or a `BLOCKED:` title), `✓` done (a `DONE:` title; herdr's `done` only means a turn ended and shows as idle, per the final review on 2026-10-08), `✗` pane gone. A gone pane keeps its last known numbers.
 - **Finished** (done or gone) is collapsed by default. A lead with live descendants stays in place in the tree.
 - **Totals** sum the tree, Claude rows only; cost is an estimate, not a bill. In All, totals are labelled as Claude-only.
 - **All view:** one line per agent, grouped by repo. `~/worktrees/<repo>-*` folds into `<repo>`.
