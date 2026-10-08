@@ -163,6 +163,8 @@ describe('pane render', () => {
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount({ plugin: 'agent-tree', surface, component: 'Pane', requestId: 'agent-tree', props: PANE_PROPS(100) })
       expect(await ui.find({ type: 'Text', text: /No workers spawned from this session yet/ })).toBeDefined()
+      // Desktop draws the hero crab as an SVG; the terminal draws it in half blocks.
+      expect((await ui.findAll({ type: 'Svg' })).length).toBe(surface === 'desktop' ? 1 : 0)
       await ui.unmount()
       const narrow = await $.ui.mount({ plugin: 'agent-tree', surface, component: 'Pane', requestId: 'agent-tree', props: PANE_PROPS(40) })
       expect(await narrow.find({ type: 'Text', text: /🦀 asleep/ })).toBeDefined()

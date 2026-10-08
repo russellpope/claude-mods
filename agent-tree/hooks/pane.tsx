@@ -1,5 +1,6 @@
 import type { HerdrAgent, InProcRun, Panel, Snapshot, TreeNode } from '../types'
 import { CRAB_ROWS, MINI, ROLE_COLOR, halfBlock, moodOf, moodTag, spriteFor } from './crab'
+import { costumeOfRole, crabSvg, heroSvg } from './svg-crab'
 import { partition } from './tree'
 import { fmtCost, fmtTime, fmtTokens, modelName } from './usage'
 import { STATUS_COLOR, STATUS_GLYPH, ctxBar, ctxPercent, groupAll, isCompact, totals, treePrefix } from './view'
@@ -19,6 +20,7 @@ const usageText = (n: TreeNode): string => {
 
 export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   const { Box, Text, Button } = ui
+  const Svg = m.surface === 'desktop' && 'Svg' in ui ? ui.Svg : null
   const { snap, panel } = m
   const compact = isCompact(panel.compact, m.cols)
   const { tree, finished } = partition(snap.nodes)
@@ -43,6 +45,8 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     <Text key="crab-mini" color={ROLE_COLOR.lead}>
       🦀 {mood}
     </Text>
+  ) : Svg ? (
+    <Svg key="crab" source={heroSvg(mood)} alt={`crab: ${mood}`} width={34} height={32} />
   ) : (
     <Box key="crab" flexDirection="column" width={18} flexShrink={0}>
       {halfBlock(spriteFor(mood, m.frame)).slice(0, CRAB_ROWS).map((segs, y) => (
@@ -82,7 +86,11 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
       <Box key={`${n.pane}-${n.startedAt}`} flexDirection="row" gap={1}>
         <Text dimColor>{treePrefix(n)}</Text>
         <Text color={STATUS_COLOR[n.status]}>{STATUS_GLYPH[n.status]}</Text>
-        <Text color={ROLE_COLOR[n.role]}>{MINI}</Text>
+        {Svg ? (
+          <Svg key={`cr-${n.pane}`} source={crabSvg(costumeOfRole(n.role), n.status === 'working')} alt={n.role} width={34} height={32} />
+        ) : (
+          <Text color={ROLE_COLOR[n.role]}>{MINI}</Text>
+        )}
         <Button key={`f-${n.pane}-${n.startedAt}`} label={n.name} plain onPress={() => act.focus(n.pane)} />
         <Text dimColor wrap="truncate-end">
           {n.harness} {usageText(n)} {fmtTime(n.lastSeen - n.startedAt)} {n.ticket}
