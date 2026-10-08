@@ -80,6 +80,7 @@ export async function recordEdges($: EngineInterface, root: string, parentSessio
   const p = await read($, panel)
   if (!p.isAutoOpened) {
     await update($, panel, prev => ({ ...prev, isAutoOpened: true }))
+    mayBeOpen = true
     void $.ui.open({ id: PANE, title: PANE_TITLE }).catch(() => undefined)
   }
 }
@@ -205,15 +206,24 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
   $.ui.status(statusLine(nodes))
 }
 
+// True from the moment this session opens the pane until ui.panes says it is gone: a session
+// that never opened it asks nothing every 2 s (the mod loads in every session).
+let mayBeOpen = false
+
 async function isPaneOpen($: EngineInterface): Promise<boolean> {
-  return (await $.ui.panes()).some(p => p.id === PANE)
+  if (!mayBeOpen) return false
+  mayBeOpen = (await $.ui.panes()).some(p => p.id === PANE)
+  return mayBeOpen
 }
 
 async function togglePane($: EngineInterface): Promise<boolean> {
+  // A person asked: look, whatever the flag says.
+  mayBeOpen = true
   if (await isPaneOpen($)) {
     await $.ui.close({ id: PANE })
     return false
   }
+  mayBeOpen = true
   await $.ui.open({ id: PANE, title: PANE_TITLE })
   // Awaited, so the pane's first draw has data.
   await refresh($, true).catch(() => undefined)
@@ -249,6 +259,9 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({ name: 'agent-tree', description: 'Show or hide the tree of herdr agents this session spawned' })
+    // A reload keeps an open pane but starts the module's flag over: look once.
+    mayBeOpen = true
+    await isPaneOpen($).catch(() => false)
     let tick = 0
     $.clock.every(2000, () => {
       void (async () => {
@@ -261,7 +274,7 @@ export const register: Register = (on, options) => {
       void (async () => {
         if (options.motion === 'off') return
         const snap = await read($, snapshot)
-        if (!snap.nodes.some(n => n.status === 'working') || !(await isPaneOpen($))) return
+        if (!mayBeOpen || !snap.nodes.some(n => n.status === 'working') || !(await isPaneOpen($))) return
         await update($, frame, f => f + 1)
       })().catch(() => undefined)
     })

@@ -261,3 +261,24 @@ describe('transcript reads', () => {
     expect(snap.nodes[0]?.usage?.tokens).toBe(1230)
   })
 })
+
+describe('idle cost', () => {
+  test('a session that never opened the pane or spawned a worker polls nothing', async ($, on) => {
+    const clock = mock.clock(on)
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    let panesCalls = 0
+    on('ui.panes', async () => {
+      panesCalls++
+      return { value: [] }
+    })
+    on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+    on('command.register', async (_$, e) => ({ value: { command: e.name } }))
+
+    await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
+    panesCalls = 0 // session.start looks once, for a pane kept across a reload
+    await clock.advance(10_000)
+
+    expect(panesCalls).toBe(0)
+  })
+})
