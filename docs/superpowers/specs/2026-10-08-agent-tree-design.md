@@ -106,7 +106,7 @@ None of these throws, blanks the pane, or blocks a tool call:
 
 `claude plugin test agent-tree` covers:
 
-1. The ledger writer, on herdr output fixtures for `agent start`, `workspace create` and `pane split`: the right edges get written.
+1. The ledger writer, on `herdr agent start` output (`agent_started`), and on the before/after agent-list diff when that output was swallowed: the right edges get written. (Amended 2026-10-08: only `agent start` makes an edge, per plan deviation 2.)
 2. **Negative control:** a Bash command that only mentions `herdr agent start` (inside `echo`, or in a quoted string) writes no edge.
 3. Tree building: depth, cycles, and rejecting a reused pane id held by a different session.
 4. Transcript parsing: model, context tokens, running sums, cost; incremental reads.
