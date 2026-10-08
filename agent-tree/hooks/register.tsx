@@ -5,6 +5,7 @@ import type { Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
 import { invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
 import { WEEK_MS, edgeAt, edgeFileName, ledgerDir, makeEdge, parseEdge } from './ledger'
 import type { TreeNode } from '../types'
+import { completeRun, spawnRun, stepRun } from './inproc'
 import { drawPane } from './pane'
 import { TICKET_GREP_ARGV, batchCounts, batchStamp, parseTicketGrep, repoFromCommonDir, ticketFor } from './tickets'
 import type { Ticket } from './tickets'
@@ -276,5 +277,34 @@ export const register: Register = (on, options) => {
         setPanel: fn => void update($, panel, fn),
       },
     )
+  })
+
+  on('agent.spawn', async ($, e, next) => {
+    const started = await next(e)
+    if (started.deny !== undefined) return started
+    const at = await $.clock.now()
+    await update($, inproc, list =>
+      spawnRun(list, { id: started.agentId ?? e.tool_use_id, agentId: started.agentId, type: e.subagentType, description: e.description, model: started.model, at }),
+    )
+    return started
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    if (e.agentId && result.usage) {
+      const agentId = e.agentId
+      const usage = result.usage
+      await update($, inproc, list => stepRun(list, agentId, usage.model || e.model, usage))
+    }
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId) {
+      const agentId = e.agentId
+      const at = await $.clock.now()
+      await update($, inproc, list => completeRun(list, agentId, e.reason === 'answer', at))
+    }
+    return next(e)
   })
 }
