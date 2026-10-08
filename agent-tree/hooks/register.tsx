@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
-import { invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
+import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
 import { WEEK_MS, edgeAt, edgeFileName, ledgerDir, makeEdge, parseEdge } from './ledger'
 import type { TreeNode } from '../types'
 import { completeRun, spawnRun, stepRun } from './inproc'
@@ -166,6 +166,14 @@ async function withTickets($: EngineInterface, nodes: TreeNode[], repos: Record<
 // One refresh at a time: two would read the same transcript bytes and advance the offset twice.
 let running: Promise<void> | null = null
 
+// A press always answers: herdr jumps to the pane, or a toast says why it could not.
+async function focusPane($: EngineInterface, pane: string) {
+  const r = await $.process.run(['herdr', 'agent', 'focus', pane], { timeoutMs: 5000 }).catch((err: unknown) => String(err))
+  if (typeof r !== 'string' && r.exitCode === 0) return
+  const reason = typeof r === 'string' ? r : herdrError(r.stdout) || r.stderr.trim() || `exit ${r.exitCode}`
+  $.ui.toast(`agent-tree: could not focus ${pane}: ${reason}`)
+}
+
 export function refresh($: EngineInterface, full: boolean): Promise<void> {
   running ??= refreshOnce($, full).finally(() => {
     running = null
@@ -299,7 +307,7 @@ export const register: Register = (on, options) => {
         surface: e.surface,
       },
       {
-        focus: pane => void $.process.run(['herdr', 'agent', 'focus', pane], { timeoutMs: 5000 }).catch(() => undefined),
+        focus: pane => void focusPane($, pane),
         setPanel: fn => void update($, panel, fn),
       },
     )

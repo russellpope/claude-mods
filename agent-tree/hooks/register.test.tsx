@@ -181,6 +181,63 @@ describe('pane render', () => {
   })
 })
 
+describe('row press', () => {
+  test("pressing a row's name focuses that agent's herdr pane", async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const edgeText = JSON.stringify({ v: 1, parent: 'w9:p1', parentSession: '', child: 'wX:p2', name: 'demo-impl', via: 'claude-mod', at: NOW - 1000 })
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-wX_p2.json`, kind: 'file' as const, size: edgeText.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async () => ({ value: edgeText }))
+    on('fs.exists', async () => ({ value: false }))
+    const focused: string[] = []
+    on('process.run', async (_$, e) => {
+      if (e.argv[0] === 'herdr' && e.argv[2] === 'focus') {
+        focused.push(e.argv[3] ?? '')
+        return ok('{}')
+      }
+      return e.argv[0] === 'herdr' ? ok(list(ROOT, agent('wX:p2', 'demo-impl', 's2'))) : failed
+    })
+
+    const snap = await watchPane(on).open($)
+    const node = snap.nodes[0]
+    expect(node?.pane).toBe('wX:p2')
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+    await ui.press({ key: `f-wX:p2-${node?.startedAt}` })
+    await ui.unmount()
+
+    expect(focused).toEqual(['wX:p2'])
+  })
+})
+
+describe('row press failure', () => {
+  test('a focus herdr refuses shows a toast with its reason', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const edgeText = JSON.stringify({ v: 1, parent: 'w9:p1', parentSession: '', child: 'wX:p2', name: 'demo-impl', via: 'claude-mod', at: NOW - 1000 })
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-wX_p2.json`, kind: 'file' as const, size: edgeText.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async () => ({ value: edgeText }))
+    on('fs.exists', async () => ({ value: false }))
+    on('process.run', async (_$, e) => {
+      if (e.argv[0] === 'herdr' && e.argv[2] === 'focus') return { value: { exitCode: 1, stdout: '', stderr: 'agent target wX:p2 not found', isStdoutTruncated: false, isStderrTruncated: false } }
+      return e.argv[0] === 'herdr' ? ok(list(ROOT, agent('wX:p2', 'demo-impl', 's2'))) : failed
+    })
+    const toasts: string[] = []
+    on('ui.toast', async (_$, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+
+    const snap = await watchPane(on).open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+    await ui.press({ key: `f-wX:p2-${snap.nodes[0]?.startedAt}` })
+    await ui.unmount()
+
+    expect(toasts).toEqual(['agent-tree: could not focus wX:p2: agent target wX:p2 not found'])
+  })
+})
+
 describe('ledger reads', () => {
   test('an edge file caught mid-write is read again on the next refresh', async ($, on) => {
     mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })

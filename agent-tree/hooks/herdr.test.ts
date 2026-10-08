@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
+import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
 
 const raw = (pane: string, extra: Record<string, unknown> = {}) => ({
   pane_id: pane,
@@ -72,5 +72,13 @@ describe('newAgents', () => {
       JSON.stringify({ result: { type: 'agent_list', agents: [raw('w1:p1'), raw('w1:p2', { agent_session: { value: 'other' } }), raw('w1:p3')] } }),
     )
     expect(newAgents(before, after).map(a => a.pane)).toEqual(['w1:p2', 'w1:p3'])
+  })
+})
+
+describe('herdrError', () => {
+  test("a refused command's message; anything else is empty", () => {
+    expect(herdrError('{"error":{"code":"agent_not_found","message":"agent target x:p9 not found"},"id":"cli:agent:focus"}')).toBe('agent target x:p9 not found')
+    expect(herdrError('{"result":{}}')).toBe('')
+    expect(herdrError('not json')).toBe('')
   })
 })

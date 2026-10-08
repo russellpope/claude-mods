@@ -62,3 +62,13 @@ export const newAgents = (before: HerdrAgent[], after: HerdrAgent[]): HerdrAgent
   const seen = new Map(before.map(a => [a.pane, a.session]))
   return after.filter(a => !seen.has(a.pane) || (a.session !== '' && seen.get(a.pane) !== a.session))
 }
+
+// herdr reports a refused command as {"error":{"code":…,"message":…}} on stdout.
+export const herdrError = (stdout: string): string => {
+  try {
+    const m = (JSON.parse(stdout) as { error?: { message?: unknown } }).error?.message
+    return typeof m === 'string' ? m : ''
+  } catch {
+    return ''
+  }
+}
