@@ -100,3 +100,24 @@ export const wholeLines = (chunk: string): { text: string; bytes: number } => {
   const text = chunk.slice(0, chunk.lastIndexOf('\n') + 1)
   return { text, bytes: new TextEncoder().encode(text).length }
 }
+
+const utf8Length = (s: string): number => new TextEncoder().encode(s).length
+
+/**
+ * One read of a transcript: the whole lines to parse and how many bytes to move past.
+ * A full read with no newline is a line longer than a read (a pasted image, say): it is
+ * moved past, and `isSkipping` drops the rest of it, up to its newline, on the next read.
+ */
+export const consumeChunk = (chunk: string, isSkipping: boolean, chunkBytes = CHUNK_BYTES): { text: string; bytes: number; isSkipping: boolean } => {
+  let rest = chunk
+  let dropped = 0
+  if (isSkipping) {
+    const nl = chunk.indexOf('\n')
+    if (nl < 0) return { text: '', bytes: utf8Length(chunk), isSkipping: true }
+    dropped = utf8Length(chunk.slice(0, nl + 1))
+    rest = chunk.slice(nl + 1)
+  }
+  const lines = wholeLines(rest)
+  if (lines.bytes === 0 && !isSkipping && utf8Length(rest) >= chunkBytes) return { text: '', bytes: utf8Length(rest), isSkipping: true }
+  return { text: lines.text, bytes: dropped + lines.bytes, isSkipping: false }
+}

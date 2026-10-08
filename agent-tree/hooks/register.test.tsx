@@ -198,3 +198,66 @@ describe('ledger reads', () => {
     expect((await pane.open($)).nodes.map(n => n.name)).toEqual(['late-impl'])
   })
 })
+
+// The test environment has setTimeout at run time; its type library (no DOM) does not declare it.
+declare const setTimeout: (fn: () => void, ms: number) => unknown
+
+describe('transcript reads', () => {
+  const usageLine = (id: string, input: number) =>
+    JSON.stringify({ type: 'assistant', isSidechain: false, message: { id, model: 'claude-sonnet-5-5', usage: { input_tokens: input, output_tokens: 0 } } })
+  const EDGE = JSON.stringify({ v: 1, parent: 'w9:p1', parentSession: '', child: 'wX:p2', name: 'demo-impl', via: 'claude-mod', at: NOW - 1000 })
+
+  // Answers herdr with one Claude worker and runs `tail -c +N | head -c M` over an in-memory transcript.
+  // While `gate.isArmed`, the next transcript read waits until another read starts (or 300 ms pass), so two refreshes overlap.
+  const worker = (on: Parameters<TestBody>[1], transcript: { text: string }, gate = { isArmed: false }) => {
+    let held: (() => void) | null = null
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-wX_p2.json`, kind: 'file' as const, size: EDGE.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async () => ({ value: EDGE }))
+    on('fs.exists', async () => ({ value: true }))
+    on('process.run', async (_$, e) => {
+      if (e.argv[0] === 'herdr') return ok(list(ROOT, agent('wX:p2', 'demo-impl', 's2')))
+      if (e.argv[0] !== '/bin/sh') return failed
+      if (held) {
+        held()
+        held = null
+      } else if (gate.isArmed) {
+        gate.isArmed = false
+        await new Promise<void>(r => {
+          held = r
+          setTimeout(r, 300)
+        })
+      }
+      const bytes = new TextEncoder().encode(transcript.text)
+      const start = Number(e.argv[4]) - 1
+      return ok(new TextDecoder().decode(bytes.slice(start, start + Number(e.argv[6]))))
+    })
+  }
+
+  test('a line longer than one read is skipped, and the lines after it still count', async ($, on) => {
+    const transcript = { text: `${usageLine('m1', 10)}\n{"type":"user","note":"${'x'.repeat(2_500_000)}"}\n${usageLine('m2', 20)}\n` }
+    worker(on, transcript)
+
+    const snap = await watchPane(on).open($)
+
+    expect(snap.nodes[0]?.usage?.tokens).toBe(30)
+  })
+
+  test('two refreshes at once do not skip transcript bytes', async ($, on) => {
+    const transcript = { text: `${usageLine('m1', 1000)}\n` }
+    const gate = { isArmed: false }
+    worker(on, transcript, gate)
+    const pane = watchPane(on)
+    await pane.open($)
+
+    transcript.text += `${usageLine('m2', 200)}\n`
+    gate.isArmed = true
+    await Promise.all([pane.open($), pane.open($)])
+    transcript.text += `${usageLine('m3-a-longer-id', 30)}\n`
+    const snap = await pane.open($)
+
+    expect(snap.nodes[0]?.usage?.tokens).toBe(1230)
+  })
+})

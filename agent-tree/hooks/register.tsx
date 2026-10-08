@@ -10,7 +10,7 @@ import { drawPane } from './pane'
 import { TICKET_GREP_ARGV, batchCounts, batchStamp, parseTicketGrep, repoFromCommonDir, ticketFor } from './tickets'
 import type { Ticket } from './tickets'
 import { buildTree } from './tree'
-import { CHUNK_BYTES, addTranscript, emptyUsage, toUsage, transcriptPath, wholeLines } from './usage'
+import { CHUNK_BYTES, addTranscript, consumeChunk, emptyUsage, toUsage, transcriptPath } from './usage'
 import type { UsageAcc } from './usage'
 import { statusLine } from './view'
 
@@ -84,7 +84,7 @@ export async function recordEdges($: EngineInterface, root: string, parentSessio
   }
 }
 
-const usageCache = new Map<string, { path: string; offset: number; acc: UsageAcc }>()
+const usageCache = new Map<string, { path: string; offset: number; isSkipping: boolean; acc: UsageAcc }>()
 const repoCache = new Map<string, string>()
 let ticketCache: { at: number; byRepo: Map<string, Ticket[]> } = { at: -Infinity, byRepo: new Map() }
 const TICKETS_EVERY_MS = 15_000
@@ -112,7 +112,7 @@ async function withUsage($: EngineInterface, home: string, nodes: TreeNode[]): P
         out.push(n)
         continue
       }
-      c = { path, offset: 0, acc: emptyUsage() }
+      c = { path, offset: 0, isSkipping: false, acc: emptyUsage() }
       usageCache.set(n.session, c)
     }
     for (let i = 0; i < MAX_CHUNKS_PER_TICK; i++) {
@@ -120,10 +120,11 @@ async function withUsage($: EngineInterface, home: string, nodes: TreeNode[]): P
         .run(['/bin/sh', '-c', 'tail -c +"$1" "$2" | head -c "$3"', 'sh', String(c.offset + 1), c.path, String(CHUNK_BYTES)], { timeoutMs: 10_000 })
         .catch(() => null)
       if (!r || r.exitCode !== 0) break
-      const { text, bytes } = wholeLines(r.stdout)
-      if (!bytes) break
-      c.acc = addTranscript(c.acc, text)
-      c.offset += bytes
+      const read = consumeChunk(r.stdout, c.isSkipping)
+      if (!read.bytes) break
+      c.acc = addTranscript(c.acc, read.text)
+      c.offset += read.bytes
+      c.isSkipping = read.isSkipping
     }
     out.push({ ...n, usage: c.acc.model ? toUsage(c.acc) : n.usage })
   }
@@ -161,7 +162,17 @@ async function withTickets($: EngineInterface, nodes: TreeNode[], repos: Record<
   return { nodes: out, batch }
 }
 
-export async function refresh($: EngineInterface, full: boolean): Promise<void> {
+// One refresh at a time: two would read the same transcript bytes and advance the offset twice.
+let running: Promise<void> | null = null
+
+export function refresh($: EngineInterface, full: boolean): Promise<void> {
+  running ??= refreshOnce($, full).finally(() => {
+    running = null
+  })
+  return running
+}
+
+async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
   const at = await $.clock.now()
   const home = (await $.env.get('HOME')) ?? ''
   const root = (await $.env.get('HERDR_PANE_ID')) ?? ''
