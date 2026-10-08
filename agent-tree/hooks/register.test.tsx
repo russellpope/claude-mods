@@ -105,20 +105,28 @@ describe('Bash spawn hook', () => {
 
 // A test body's $ is the kit's engine, not the plugin's, and has no state noun: refresh is
 // driven the way a person drives it, by /agent-tree, which opens the pane and awaits it.
-const openPane = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1]): Promise<Snapshot> => {
+// Registers the pane's test hooks once (the kit wants every test hook before the first $ call);
+// open() then runs /agent-tree and returns the snapshot the first refresh wrote.
+const watchPane = (on: Parameters<TestBody>[1]) => {
+  let last: Snapshot | undefined
   on('ui.panes', async () => ({ value: [] }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('ui.status', async () => ({ value: undefined }))
   // Test hooks sit beneath the plugin: this one sees each snapshot write, then lets the kit store it.
-  let last: Snapshot | undefined
   on('state.set', async (_$, e, next) => {
     if (e.plugin === 'agent-tree' && e.key === 'snapshot') last = e.value as Snapshot
     return next(e)
   })
-  await $.command.run({ command: 'agent-tree', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
-  if (!last) throw new Error('no snapshot was written')
-  return last
+  return {
+    open: async ($: Parameters<TestBody>[0]): Promise<Snapshot> => {
+      last = undefined
+      await $.command.run({ command: 'agent-tree', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+      if (!last) throw new Error('no snapshot was written')
+      return last
+    },
+  }
 }
+const openPane = ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1]): Promise<Snapshot> => watchPane(on).open($)
 const failed = { value: { exitCode: 1, stdout: '', stderr: 'no socket', isStdoutTruncated: false, isStderrTruncated: false } }
 
 describe('refresh (through /agent-tree)', () => {
@@ -170,5 +178,23 @@ describe('pane render', () => {
       expect(await narrow.find({ type: 'Text', text: /🦀 asleep/ })).toBeDefined()
       await narrow.unmount()
     }
+  })
+})
+
+describe('ledger reads', () => {
+  test('an edge file caught mid-write is read again on the next refresh', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const edgeText = JSON.stringify({ v: 1, parent: 'w9:p1', parentSession: '', child: 'wX:p5', name: 'late-impl', via: 'claude-mod', at: NOW - 1000 })
+    let reads = 0
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-wX_p5.json`, kind: 'file' as const, size: 0, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async () => ({ value: reads++ === 0 ? '' : edgeText }))
+    on('fs.exists', async () => ({ value: false }))
+    on('process.run', async (_$, e) => (e.argv[0] === 'herdr' ? ok(list(ROOT, agent('wX:p5', 'late-impl', 's5'))) : failed))
+
+    const pane = watchPane(on)
+    expect((await pane.open($)).nodes).toEqual([])
+    expect((await pane.open($)).nodes.map(n => n.name)).toEqual(['late-impl'])
   })
 })

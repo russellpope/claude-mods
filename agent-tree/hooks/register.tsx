@@ -32,7 +32,8 @@ export const inproc = atom({ plugin: 'agent-tree', key: 'inproc' } as const, [] 
 export const edgeCount = atom({ plugin: 'agent-tree', key: 'edgeCount' } as const, 0)
 
 // Module caches: a reload starts them over, which only costs a re-read.
-const edgeCache = new Map<string, Edge | null>()
+// Only edges that parsed: a sibling session's file caught mid-write is read again next time.
+const edgeCache = new Map<string, Edge>()
 
 /** `herdr agent list`, or null when herdr does not answer. */
 export async function listAgents($: EngineInterface): Promise<HerdrAgent[] | null> {
@@ -57,10 +58,11 @@ export async function loadEdges($: EngineInterface, home: string, at: number): P
   for (const name of names) {
     const t = edgeAt(name)
     if (!Number.isFinite(t) || t < at - WEEK_MS) continue
-    if (!edgeCache.has(name)) {
-      edgeCache.set(name, await $.fs.read(`${dir}/${name}`).then(text => parseEdge(String(text)), () => null))
+    let e = edgeCache.get(name)
+    if (!e) {
+      e = (await $.fs.read(`${dir}/${name}`).then(text => parseEdge(String(text)), () => null)) ?? undefined
+      if (e) edgeCache.set(name, e)
     }
-    const e = edgeCache.get(name)
     if (e) edges.push(e)
   }
   return edges
