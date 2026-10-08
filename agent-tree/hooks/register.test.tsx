@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
+
+import type { Snapshot } from '../types'
 
 const agent = (pane: string, name: string, session: string) => ({
   pane_id: pane,
@@ -74,6 +77,16 @@ describe('Bash spawn hook', () => {
     expect(writes).toEqual([])
   })
 
+  test('the hook never blocks the Bash call, even when the environment is unreadable', async ($, on) => {
+    on('env.get', async () => ({ deny: 'environment unavailable' }))
+    on('tool.call', { tool: 'Bash' }, bash('real output'))
+
+    const res = await $.tool.call({ tool: 'Bash', command: 'herdr agent start demo --kind claude --pane wX:p2' })
+
+    // The engine skips a hook that throws and runs the call: the worker's output still arrives.
+    expect((res.result as { stdout?: string } | undefined)?.stdout).toBe('real output')
+  })
+
   test('outside herdr nothing is recorded', async ($, on) => {
     mock.env(on, { HOME: '/home/me' })
     mock.store(on)
@@ -87,5 +100,73 @@ describe('Bash spawn hook', () => {
     await $.tool.call({ tool: 'Bash', command: 'herdr agent start demo --kind claude --pane wX:p2' })
 
     expect(writes).toEqual([])
+  })
+})
+
+// A test body's $ is the kit's engine, not the plugin's, and has no state noun: refresh is
+// driven the way a person drives it, by /agent-tree, which opens the pane and awaits it.
+const openPane = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1]): Promise<Snapshot> => {
+  on('ui.panes', async () => ({ value: [] }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('ui.status', async () => ({ value: undefined }))
+  // Test hooks sit beneath the plugin: this one sees each snapshot write, then lets the kit store it.
+  let last: Snapshot | undefined
+  on('state.set', async (_$, e, next) => {
+    if (e.plugin === 'agent-tree' && e.key === 'snapshot') last = e.value as Snapshot
+    return next(e)
+  })
+  await $.command.run({ command: 'agent-tree', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+  if (!last) throw new Error('no snapshot was written')
+  return last
+}
+const failed = { value: { exitCode: 1, stdout: '', stderr: 'no socket', isStdoutTruncated: false, isStderrTruncated: false } }
+
+describe('refresh (through /agent-tree)', () => {
+  test('herdr not answering: the snapshot says so and nothing throws', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('process.run', async () => failed)
+
+    expect((await openPane($, on)).error).toBe('herdr is not answering.')
+  })
+
+  test('outside herdr: no tree, a plain message', async ($, on) => {
+    mock.env(on, { HOME: '/home/me' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+
+    expect((await openPane($, on)).error).toBe('Not in a herdr pane: no agent tree here.')
+  })
+
+  test('a recorded child shows up in the tree with its status', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const edgeText = JSON.stringify({ v: 1, parent: 'w9:p1', parentSession: '', child: 'wX:p2', name: 'demo-impl', via: 'claude-mod', at: NOW - 1000 })
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-wX_p2.json`, kind: 'file' as const, size: edgeText.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async () => ({ value: edgeText }))
+    on('fs.exists', async () => ({ value: false }))
+    on('process.run', async (_$, e) => (e.argv[0] === 'herdr' ? ok(list(ROOT, { ...agent('wX:p2', 'demo-impl', 's2'), agent: 'codex', agent_status: 'working' })) : failed))
+
+    const snap = await openPane($, on)
+
+    expect(snap.error).toBe('')
+    expect(snap.nodes.map(n => [n.pane, n.name, n.status, n.role])).toEqual([['wX:p2', 'demo-impl', 'working', 'implementer']])
+  })
+})
+
+describe('pane render', () => {
+  const PANE_PROPS = (bodyColumns: number) => ({ title: 'Agent tree', isFocused: false, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} })
+
+  test('an empty tree draws on every surface, full and compact', async $ => {
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'agent-tree', surface, component: 'Pane', requestId: 'agent-tree', props: PANE_PROPS(100) })
+      expect(await ui.find({ type: 'Text', text: /No workers spawned from this session yet/ })).toBeDefined()
+      await ui.unmount()
+      const narrow = await $.ui.mount({ plugin: 'agent-tree', surface, component: 'Pane', requestId: 'agent-tree', props: PANE_PROPS(40) })
+      expect(await narrow.find({ type: 'Text', text: /🦀 asleep/ })).toBeDefined()
+      await narrow.unmount()
+    }
   })
 })
