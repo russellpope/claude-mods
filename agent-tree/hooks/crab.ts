@@ -2,30 +2,112 @@ import type { BatchCounts, Role, TreeNode } from '../types'
 
 export type Segment = { text: string; fg?: string; bg?: string }
 
-// Clay body and ink eyes from savvy-progress's pixel Clawd (after DockCrab).
+// Clay body and ink eyes after savvy-progress's pixel Clawd (after DockCrab), redrawn at 24×12.
 export const PALETTE: Record<string, string> = {
   c: '#D97757', // clay body
+  d: '#A9583C', // clay shade
   k: '#1F1E1D', // ink: eyes, magnifier rim
+  e: '#F4F1EA', // eye glint
   b: '#4A4A48', // keyboard
   w: '#C9CCD2', // keys
   g: '#A9D6F5', // glass
   s: '#6FA8DC', // sweat, confetti
   y: '#F5C542', // confetti
   p: '#B48EF0', // confetti
+  r: '#D0453F', // alarm
+  z: '#9A9A96', // sleep
 }
 
-export const CRAB_ROWS = 4
+export const CRAB_WIDTH = 24
+/** Terminal rows: two pixel rows per cell. */
+export const CRAB_ROWS = 6
 
-const KEYBOARD = ['bbbbbbbbbbbbbbbb', 'bwbwbwbwbwbwbwbb', 'bbbbbbbbbbbbbbbb']
-const EMPTY = '................'
-
+// The crab sits behind its keyboard (the last four pixel rows); its claws reach the keys.
 const SPRITES = {
-  typingA: ['cc..............', '.cc.cccccccc....', '...cckcccckcc...', '...cccccccccc.c.', '....c.c..c.c.cc.', ...KEYBOARD],
-  typingB: ['..............cc', '....cccccccc.cc.', '...cckcccckcc...', '.c.cccccccccc...', '.cc.c.c..c.c....', ...KEYBOARD],
-  review: ['...........kkk..', '....ccccccckgggk', '...cckcccckkgggk', '...ccccccccckkk.', '....c.c..c.cc...', EMPTY, EMPTY, EMPTY],
-  blocked: ['.............s..', '....cccccccc.ss.', '...cckcccckcc...', '.c.cccccccccc.c.', '.cc.c.c..c.c.cc.', ...KEYBOARD],
-  asleep: [EMPTY, '....cccccccc....', '...cccccccccc...', '.c.ckkcccckkc.c.', '.cc.c.c..c.c.cc.', ...KEYBOARD],
-  party: ['cc.y......p...cc', '.cc.cccccccc.cc.', '...cckcccckcc...', '.s.cccccccccc.y.', '....c.c..c.c....', '..p.....y....s..', EMPTY, EMPTY],
+  typingA: [
+    '........................',
+    '.......cccccccccc.......',
+    '......cccccccccccc......',
+    '......ccekcccekccc......',
+    '......cckkccckkccc..cc..',
+    '......cccccccccccc.cc...',
+    '...ccccccccccccccccc....',
+    '...cc.dddddddddddd......',
+    '.bbccbbbbbbbbbbbbbbbbbb.',
+    '.bwbwbwbwbwbwbwbwbwbwbb.',
+    '.bbwbwbwbwbwbwbwbwbwbwb.',
+    '.bbbbbbbbbbbbbbbbbbbbbb.',
+  ],
+  typingB: [
+    '........................',
+    '.......cccccccccc.......',
+    '......cccccccccccc......',
+    '......ccekcccekccc......',
+    '..cc..cckkccckkccc......',
+    '...cc.cccccccccccc......',
+    '....cccccccccccccccccc..',
+    '......dddddddddddd.cc...',
+    '.bbbbbbbbbbbbbbbbbbccbb.',
+    '.bwbwbwbwbwbwbwbwbwbwbb.',
+    '.bbwbwbwbwbwbwbwbwbwbwb.',
+    '.bbbbbbbbbbbbbbbbbbbbbb.',
+  ],
+  review: [
+    '........................',
+    '.......cccccckkkc.......',
+    '......cccccckgggkc......',
+    '......ccekckggekgk......',
+    '......cckkckggkkgk......',
+    '......cccccckgggkc......',
+    '...cccccccccckkkcdcc....',
+    '...cc.ddddddddddddcc....',
+    '.bbccbbbbbbbbbbbbbbbbbb.',
+    '.bwbwbwbwbwbwbwbwbwbwbb.',
+    '.bbwbwbwbwbwbwbwbwbwbwb.',
+    '.bbbbbbbbbbbbbbbbbbbbbb.',
+  ],
+  blocked: [
+    '.....................rr.',
+    '.......cccccccccc....rr.',
+    '......ccccccccccccs..rr.',
+    '......ccekcccekcccss....',
+    '......cckkccckkccc...rr.',
+    '......cccccccccccc......',
+    '...cccccccccccccccccc...',
+    '...cc.dddddddddddd.cc...',
+    '.bbccbbbbbbbbbbbbbbccbb.',
+    '.bwbwbwbwbwbwbwbwbwbwbb.',
+    '.bbwbwbwbwbwbwbwbwbwbwb.',
+    '.bbbbbbbbbbbbbbbbbbbbbb.',
+  ],
+  asleep: [
+    '...................zzzzz',
+    '.......cccccccccc.....z.',
+    '......cccccccccccc...z..',
+    '......cccccccccccc..z...',
+    '......cckkccckkccc.zzzzz',
+    '......cccccccccccc......',
+    '...cccccccccccccccccc...',
+    '...cc.dddddddddddd.cc...',
+    '.bbccbbbbbbbbbbbbbbccbb.',
+    '.bwbwbwbwbwbwbwbwbwbwbb.',
+    '.bbwbwbwbwbwbwbwbwbwbwb.',
+    '.bbbbbbbbbbbbbbbbbbbbbb.',
+  ],
+  party: [
+    '.yc.c..p...s....y..c.cp.',
+    '...cc..cccccccccc..cc...',
+    '....cccccccccccccccc....',
+    '......ccckcccckccc......',
+    '......cckckcckckcc......',
+    '......ccccckkccccc......',
+    '......cccccccccccc......',
+    '......dddddddddddd......',
+    '.bbbbbbbbbbbbbbbbbbbbbb.',
+    '.bwbwbwbwbwbwbwbwbwbwbb.',
+    '.bbwbwbwbwbwbwbwbwbwbwb.',
+    '.bbbbbbbbbbbbbbbbbbbbbb.',
+  ],
 } as const
 
 export type Mood = 'typing' | 'review' | 'blocked' | 'asleep' | 'party'
@@ -35,13 +117,8 @@ export const spriteFor = (mood: Mood, frame: number): string[] => {
   return [...SPRITES[mood]]
 }
 
-export const moodTag = (mood: Mood, frame: number): { text: string; color: string } => {
-  if (mood === 'blocked') return { text: '!', color: '#D0453F' }
-  if (mood === 'asleep') return { text: 'z', color: '#9a9a96' }
-  if (mood === 'party') return { text: frame % 2 ? '✦' : '★', color: '#F5C542' }
-  if (mood === 'review') return { text: '?', color: '#D85A30' }
-  return { text: '', color: '' }
-}
+export const moodWord = (mood: Mood): string =>
+  ({ typing: 'typing', review: 'reviewing', blocked: 'blocked', asleep: 'asleep', party: 'batch done' })[mood]
 
 export const moodOf = (nodes: TreeNode[], batch: BatchCounts | null): Mood => {
   if (batch && batch.total > 0 && batch.fixed === batch.total) return 'party'

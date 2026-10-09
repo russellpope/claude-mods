@@ -1,7 +1,7 @@
 import type { HerdrAgent, NodeStatus, Panel, TreeNode, Usage } from '../types'
 import { repoName } from './tickets'
 import { isLive } from './tree'
-import { windowOf } from './usage'
+import { fmtCost, fmtTime, modelName, windowOf } from './usage'
 
 export const STATUS_GLYPH: Record<NodeStatus, string> = { working: '●', idle: '◌', blocked: '!', done: '✓', gone: '✗' }
 export const STATUS_COLOR: Record<NodeStatus, string | undefined> = { working: '#378ADD', idle: undefined, blocked: '#D0453F', done: '#3B9C5F', gone: undefined }
@@ -39,7 +39,46 @@ export const statusLine = (nodes: TreeNode[]): string | undefined => {
 
 export const ctxPercent = (u: Usage | null): number => (u && u.model ? Math.min(100, Math.round((u.contextTokens / windowOf(u.model)) * 100)) : 0)
 
-export const ctxBar = (pct: number, width: number): string => {
-  const filled = Math.round((width * pct) / 100)
-  return '▓'.repeat(filled) + '░'.repeat(Math.max(0, width - filled))
+// The colours and thresholds of build_bar in ~/.claude/statusline.sh, so the pane reads like the status line.
+export const meterColor = (pct: number): string => (pct >= 90 ? '#FF5555' : pct >= 70 ? '#E6C800' : pct >= 50 ? '#FFB055' : '#00A000')
+
+/** ● filled (rounded down, as build_bar does) and ○ empty. */
+export const dots = (pct: number, width: number): { filled: string; empty: string } => {
+  const filled = Math.floor((Math.min(100, Math.max(0, pct)) * width) / 100)
+  return { filled: '●'.repeat(filled), empty: '○'.repeat(width - filled) }
+}
+
+/** How long a row has run. A row recorded after its pane closed was never seen running: no time. */
+export const spanText = (n: TreeNode): string => (n.status === 'gone' && n.lastSeen <= n.startedAt ? '—' : fmtTime(n.lastSeen - n.startedAt))
+
+export const modelLabel = (u: Usage | null): string => (!u || !u.model ? '' : u.effort ? `${modelName(u.model)}·${u.effort}` : modelName(u.model))
+
+export const countsLine = (nodes: TreeNode[]): string => {
+  if (!nodes.length) return 'no workers yet'
+  const count = (f: (n: TreeNode) => boolean) => nodes.filter(f).length
+  const parts: [number, string][] = [
+    [count(n => n.status === 'working'), 'working'],
+    [count(n => n.status === 'idle'), 'idle'],
+    [count(n => n.status === 'blocked'), 'blocked'],
+    [count(n => n.status === 'done' || n.status === 'gone'), 'finished'],
+  ]
+  return parts
+    .filter(([k]) => k > 0)
+    .map(([k, label]) => `${k} ${label}`)
+    .join(' · ')
+}
+
+export const clip = (text: string, width: number): string => (text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`)
+
+export const costText = (u: Usage | null): string => (u ? `≈${fmtCost(u.costUsd)}` : '')
+
+/** Column widths so rows line up: the name column holds the tree prefix too, capped at `maxName`. */
+export const rowColumns = (nodes: TreeNode[], maxName: number): { name: number; harness: number; model: number; cost: number } => {
+  const widest = (f: (n: TreeNode) => number) => nodes.reduce((w, n) => Math.max(w, f(n)), 0)
+  return {
+    name: Math.min(maxName, widest(n => treePrefix(n).length + n.name.length)),
+    harness: widest(n => n.harness.length),
+    model: widest(n => modelLabel(n.usage).length),
+    cost: widest(n => costText(n.usage).length),
+  }
 }

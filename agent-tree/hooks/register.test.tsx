@@ -346,6 +346,70 @@ describe('transcript reads', () => {
 
     expect(snap.nodes[0]?.usage?.tokens).toBe(1230)
   })
+
+  // The pane's look, drawn from a worker at 72% of its context window (yellow on the statusline's scale).
+  const PROPS = (bodyColumns: number) => ({ title: 'Agent tree', isFocused: false, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} })
+
+  test('full view: the context meter is the statusline dots, coloured by its thresholds, then the percent', async ($, on) => {
+    worker(on, { text: `${usageLine('m1', 720_000)}\n` })
+    await watchPane(on).open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS(120) })
+
+    const filled = await ui.find({ type: 'Text', text: /^●+$/ })
+    expect([filled?.text, filled?.props.color]).toEqual(['●●●●●●●', '#E6C800'])
+    expect((await ui.find({ type: 'Text', text: /^○+$/ }))?.text).toBe('○○○')
+    expect(await ui.find({ type: 'Text', text: /^72%$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('compact view: the percent alone, in the meter colour', async ($, on) => {
+    worker(on, { text: `${usageLine('m1', 720_000)}\n` })
+    await watchPane(on).open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS(40) })
+
+    expect((await ui.find({ type: 'Text', text: /^72%$/ }))?.props.color).toBe('#E6C800')
+    expect(await ui.find({ type: 'Text', text: /●/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('summary: the mood word and live counts, then cost, tokens and labelled elapsed time', async ($, on) => {
+    worker(on, { text: `${usageLine('m1', 720_000)}\n` })
+    await watchPane(on).open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS(120) })
+
+    expect(await ui.find({ type: 'Text', text: /^asleep · 1 idle$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /tok · .* elapsed$/ })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('pane chrome', () => {
+  test('header: the current view at full strength, the others dim, no brackets', async $ => {
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: false, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+    const tree = await ui.find({ type: 'Button', key: 'm-tree' })
+    const all = await ui.find({ type: 'Button', key: 'm-all' })
+    expect([tree?.props.label, tree?.props.dimColor ?? false]).toEqual(['Tree', false])
+    expect([all?.props.label, all?.props.dimColor]).toEqual(['All', true])
+    await ui.unmount()
+  })
+
+  test('a finished row recorded after its pane closed shows — for its time', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const edgeText = JSON.stringify({ v: 1, parent: 'w9:p1', parentSession: '', child: 'wX:p7', name: 'old-fixer', via: 'backfill', at: NOW - 1000 })
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-wX_p7.json`, kind: 'file' as const, size: edgeText.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async () => ({ value: edgeText }))
+    on('fs.exists', async () => ({ value: false }))
+    on('process.run', async (_$, e) => (e.argv[0] === 'herdr' ? ok(list(ROOT)) : failed))
+
+    await watchPane(on).open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: false, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+    await ui.press({ key: 's-fin' })
+    expect(await ui.find({ type: 'Text', text: /^—$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^0:00$/ })).toBeUndefined()
+    await ui.unmount()
+  })
 })
 
 describe('idle cost', () => {
