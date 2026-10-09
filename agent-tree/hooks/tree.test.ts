@@ -122,3 +122,62 @@ describe('partition', () => {
     expect(finished.map(n => n.pane)).toEqual(['D'])
   })
 })
+
+describe('workspace inference (a lead without the mod still shows its workers)', () => {
+  // Root w9:pR spawned lead wZ:p1 into its own team workspace wZ; the lead's session records nothing.
+  const lead = edge('w9:pR', 'wZ:p1', 1, 'y1zu-lead')
+  const inWs = (pane: string, over: Partial<HerdrAgent> = {}) => ag(pane, { workspace: pane.split(':')[0], ...over })
+  const buildAt = (edges: Edge[], agents: HerdrAgent[], previous: TreeNode[] = [], at = 1000) =>
+    buildTree({ root: 'w9:pR', edges, agents, bindings: {}, previous, at })
+
+  test("an unrecorded agent in a live lead's workspace is that lead's child, marked inferred", () => {
+    const agents = [inWs('w9:pR'), inWs('w9:p2'), inWs('wZ:p1', { name: 'y1zu-lead' }), inWs('wZ:p3', { name: 'y1zu-reviewer', harness: 'codex' })]
+    const { nodes } = buildAt([lead], agents)
+    expect(nodes.map(n => [n.pane, n.depth, n.isLast, n.inferred ?? false, n.role])).toEqual([
+      ['wZ:p1', 0, true, false, 'lead'],
+      ['wZ:p3', 1, true, true, 'reviewer'],
+    ])
+    expect(nodes[1]).toMatchObject({ parent: 'wZ:p1', harness: 'codex', status: 'working', startedAt: 1000, lastSeen: 1000 })
+  })
+
+  test("the root's own workspace is never mined", () => {
+    const split = edge('w9:pR', 'w9:p5', 1)
+    const { nodes } = buildAt([split], [inWs('w9:pR'), inWs('w9:p5'), inWs('w9:p2'), inWs('w9:p3')])
+    expect(nodes.map(n => n.pane)).toEqual(['w9:p5'])
+  })
+
+  test('an agent an edge already holds is not adopted a second time', () => {
+    const worker = edge('wZ:p1', 'wZ:p2', 2)
+    const { nodes } = buildAt([lead, worker], [inWs('wZ:p1'), inWs('wZ:p2'), inWs('wZ:p3')])
+    expect(nodes.map(n => [n.pane, n.depth, n.isLast, n.inferred ?? false])).toEqual([
+      ['wZ:p1', 0, true, false],
+      ['wZ:p2', 1, false, false],
+      ['wZ:p3', 1, true, true],
+    ])
+  })
+
+  test('a lead that is gone adopts nothing new', () => {
+    const { nodes } = buildAt([lead], [inWs('wZ:p3')])
+    expect(nodes.map(n => n.pane)).toEqual(['wZ:p1'])
+  })
+
+  test('an inferred worker keeps its first-seen start, and goes to gone when it leaves', () => {
+    const agents = [inWs('wZ:p1'), inWs('wZ:p3')]
+    const first = buildAt([lead], agents, [], 500).nodes
+    const again = buildAt([lead], agents, first, 900).nodes
+    expect(again[1]).toMatchObject({ pane: 'wZ:p3', startedAt: 500, lastSeen: 900, status: 'working' })
+    const left = buildAt([lead], [inWs('wZ:p1')], again, 1200).nodes
+    expect(left[1]).toMatchObject({ pane: 'wZ:p3', startedAt: 500, lastSeen: 900, status: 'gone', inferred: true })
+    expect(partition(left).finished.map(n => n.pane)).toEqual(['wZ:p3'])
+  })
+
+  test('a new occupant of the same pane (new terminal) is a new row; the old one is gone', () => {
+    const first = buildAt([lead], [inWs('wZ:p1'), inWs('wZ:p4', { name: 'nxom-reviewer', terminal: 't-old' })], [], 500).nodes
+    const { nodes } = buildAt([lead], [inWs('wZ:p1'), inWs('wZ:p4', { name: 'nxom-final-reviewer', terminal: 't-new' })], first, 900)
+    expect(nodes.map(n => [n.name, n.status, n.startedAt, n.isLast])).toEqual([
+      ['n-wZ:p1', 'working', 1, true],
+      ['nxom-reviewer', 'gone', 500, false],
+      ['nxom-final-reviewer', 'working', 900, true],
+    ])
+  })
+})

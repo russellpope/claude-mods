@@ -51,6 +51,10 @@ export type TreeNode = {
   lastSeen: number
   usage: Usage | null
   ticket: string
+  /** Not in the ledger: found in its parent's team workspace. */
+  inferred?: boolean
+  /** The herdr terminal an inferred node was seen on: a new occupant of the pane is a new node. */
+  terminal?: string
 }
 
 export type BatchCounts = { stamp: string; fixed: number; inProgress: number; open: number; total: number }
