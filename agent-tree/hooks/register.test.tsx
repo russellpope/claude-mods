@@ -210,6 +210,35 @@ describe('row press', () => {
   })
 })
 
+describe('row press, compact', () => {
+  test("in compact view a row's name is still pressable and focuses its pane", async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const edgeText = JSON.stringify({ v: 1, parent: 'w9:p1', parentSession: '', child: 'wX:p2', name: 'demo-impl', via: 'claude-mod', at: NOW - 1000 })
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-wX_p2.json`, kind: 'file' as const, size: edgeText.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async () => ({ value: edgeText }))
+    on('fs.exists', async () => ({ value: false }))
+    const focused: string[] = []
+    on('process.run', async (_$, e) => {
+      if (e.argv[0] === 'herdr' && e.argv[2] === 'focus') {
+        focused.push(e.argv[3] ?? '')
+        return ok('{}')
+      }
+      return e.argv[0] === 'herdr' ? ok(list(ROOT, agent('wX:p2', 'demo-impl', 's2'))) : failed
+    })
+
+    const snap = await watchPane(on).open($)
+    // 40 columns is under the 60-column threshold, so the pane draws compact.
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: true, bodyColumns: 40, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+    expect(await ui.find({ type: 'Text', text: /🦀/ })).toBeDefined()
+    await ui.press({ key: `f-wX:p2-${snap.nodes[0]?.startedAt}` })
+    await ui.unmount()
+
+    expect(focused).toEqual(['wX:p2'])
+  })
+})
+
 describe('row press failure', () => {
   test('a focus herdr refuses shows a toast with its reason', async ($, on) => {
     mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })

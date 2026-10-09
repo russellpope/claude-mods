@@ -77,11 +77,16 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     </Box>
   )
 
+  // The name is the row's button in both layouts: pressing it focuses that agent's herdr pane.
+  const nameButton = (n: TreeNode) => <Button key={`f-${n.pane}-${n.startedAt}`} label={n.name} plain onPress={() => act.focus(n.pane)} />
+
   const nodeRow = (n: TreeNode) =>
     compact ? (
-      <Text key={`${n.pane}-${n.startedAt}`} wrap="truncate-end">
-        <Text color={STATUS_COLOR[n.status]}>{STATUS_GLYPH[n.status]}</Text> {n.name} {n.usage ? `${ctxPercent(n.usage)}%` : ''}
-      </Text>
+      <Box key={`${n.pane}-${n.startedAt}`} flexDirection="row" gap={1}>
+        <Text color={STATUS_COLOR[n.status]}>{STATUS_GLYPH[n.status]}</Text>
+        {nameButton(n)}
+        {n.usage ? <Text dimColor>{ctxPercent(n.usage)}%</Text> : null}
+      </Box>
     ) : (
       <Box key={`${n.pane}-${n.startedAt}`} flexDirection="row" gap={1}>
         <Text dimColor>{treePrefix(n)}</Text>
@@ -91,7 +96,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         ) : (
           <Text color={ROLE_COLOR[n.role]}>{MINI}</Text>
         )}
-        <Button key={`f-${n.pane}-${n.startedAt}`} label={n.name} plain onPress={() => act.focus(n.pane)} />
+        {nameButton(n)}
         <Text dimColor wrap="truncate-end">
           {n.harness} {usageText(n)} {fmtTime(n.lastSeen - n.startedAt)} {n.ticket}
           {n.status === 'blocked' || n.status === 'done' ? ` ${n.title}` : ''}
