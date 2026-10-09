@@ -1,0 +1,19 @@
+{
+  "name": "agent-tree",
+  "version": "0.1.0",
+  "description": "Pane of the herdr agents this session spawned, and theirs: status, model, context, cost, ticket. /agent-tree toggles it; a global view lists every herdr agent.",
+  "author": { "name": "Russell Pope", "url": "https://github.com/russellpope" },
+  "homepage": "https://github.com/russellpope/claude-mods/tree/main/agent-tree",
+  "repository": "https://github.com/russellpope/claude-mods",
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "motion": {
+      "type": "string",
+      "title": "Crab animation",
+      "description": "off keeps the crab still",
+      "default": "on",
+      "options": ["on", "off"]
+    }
+  }
+}
