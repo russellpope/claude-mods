@@ -36,17 +36,19 @@ export function drawPane(ui: UI, m: PaneModel) {
     </Box>
   )
 
+  // One box per stage in a wrapping row, so a narrow dock breaks the line between stages
+  // (the arrow ending the line), never between a stage's glyph and its name.
   const pipeline = (run: Run) => (
-    <Text key="pipe">
-      {run.stages.flatMap((s, i) => [
-        i ? (
-          <Text key={`a${i}`} dimColor>
-            {' → '}
+    <Box key="pipe" flexDirection="row" flexWrap="wrap" columnGap={1}>
+      {run.stages.map((s, i) => (
+        <Box key={`pipe-${s.name}`}>
+          <Text wrap="truncate-end">
+            <Text {...paint(s.state)}>{`${glyph(s.state, frame)} ${s.name}`}</Text>
+            {i < run.stages.length - 1 ? <Text dimColor>{' →'}</Text> : null}
           </Text>
-        ) : null,
-        <Text key={`s${i}`} {...paint(s.state)}>{`${glyph(s.state, frame)} ${s.name}`}</Text>,
-      ])}
-    </Text>
+        </Box>
+      ))}
+    </Box>
   )
 
   const jobs = (run: Run) => {

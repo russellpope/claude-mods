@@ -123,7 +123,7 @@ describe('refresh (through /kintsugi-runs)', () => {
 })
 
 describe('pane', () => {
-  test('header, pipeline, jobs rows with exit and time, timing, and when kintsugi was seen', async ($, on) => {
+  test('header, jobs rows with exit and time, timing, and when kintsugi was seen', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})
     await setup(on).open($)
@@ -133,11 +133,33 @@ describe('pane', () => {
     expect((await ui.find({ type: 'Box', key: 'state' }))?.props).toMatchObject({ flexShrink: 0 })
     expect(await ui.find({ type: 'Text', text: /^⠋ running$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^started 1h ago$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^✓ fmt → ✓ check → ✓ lint → ⠋ test → ○ skip-gate$/ })).toBeDefined()
     const test = await ui.find({ type: 'Box', key: 'job-test' })
     expect(test?.text).toMatch(/⠋ running\s*test\s*—\s*1h01m/)
     expect((await ui.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/✓ passed\s*check\s*0\s*38s/)
     expect(await ui.find({ type: 'Text', text: /^seen 0s ago$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the pipeline breaks only between whole stages, each arrow kept with the stage before it', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    host(on, {})
+    await setup(on).open($)
+    const ui = await mount($, 42)
+    // A wrapping row moves whole boxes to the next line; one long Text breaks at any space,
+    // which left "○" at a line's end and "skip-gate" under it.
+    expect((await ui.find({ type: 'Box', key: 'pipe' }))?.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 })
+    // A stage's text, and how its one label truncates rather than wraps when wider than the pane.
+    const stage = async (name: string) => {
+      const box = await ui.find({ type: 'Box', key: `pipe-${name}` })
+      const label = box?.children[0] as { props?: { wrap?: string } } | undefined
+      return { text: box?.text, wrap: label?.props?.wrap }
+    }
+    expect(await stage('fmt')).toEqual({ text: '✓ fmt →', wrap: 'truncate-end' })
+    expect(await stage('check')).toEqual({ text: '✓ check →', wrap: 'truncate-end' })
+    expect(await stage('lint')).toEqual({ text: '✓ lint →', wrap: 'truncate-end' })
+    expect(await stage('test')).toEqual({ text: '⠋ test →', wrap: 'truncate-end' })
+    // The last stage has no arrow.
+    expect(await stage('skip-gate')).toEqual({ text: '○ skip-gate', wrap: 'truncate-end' })
     await ui.unmount()
   })
 
