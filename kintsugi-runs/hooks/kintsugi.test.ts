@@ -7,6 +7,7 @@ import {
   bar,
   columns,
   configPath,
+  currentRun,
   fmtAgo,
   fmtDuration,
   glyph,
@@ -16,11 +17,11 @@ import {
   overviewArgv,
   parseProjects,
   parseRuns,
-  pickRuns,
   runDuration,
   stageDuration,
   stateColor,
   stateWord,
+  timingTrack,
   unwrap,
 } from './kintsugi'
 
@@ -87,31 +88,21 @@ describe('this session’s project', () => {
 })
 
 describe('which run the tab shows', () => {
-  test("follow: a running run beats a newer finished one; other projects' runs are left out", () => {
-    const { current, recent } = pickRuns(ALL, KINTSUGI_ID, '')
-    expect(current?.id).toBe(RUNNING_GATE.operation_id)
-    expect(recent.map(r => r.id)).toEqual(['op-ticket-i371', PASSED_GATE.operation_id])
+  test("the active run; a running run beats a newer finished one; other projects' runs are left out", () => {
+    expect(currentRun(ALL, KINTSUGI_ID)?.id).toBe(RUNNING_GATE.operation_id)
   })
 
-  test('nothing active: the newest run', () => {
+  test('nothing active: the newest run, so the last result stays in view', () => {
     const idle = ALL.filter(r => r.state !== 'running')
-    expect(pickRuns(idle, KINTSUGI_ID, '').current?.id).toBe('op-ticket-i371')
+    expect(currentRun(idle, KINTSUGI_ID)?.id).toBe('op-ticket-i371')
   })
 
   test('no project (not enrolled): every project counts', () => {
-    expect(pickRuns(ALL, null, '').current?.id).toBe('op-hansa')
+    expect(currentRun(ALL, null)?.id).toBe('op-hansa')
   })
 
-  test('a pinned run holds; a pin that is gone falls back to following', () => {
-    const pinned = pickRuns(ALL, KINTSUGI_ID, PASSED_GATE.operation_id)
-    expect(pinned.current?.id).toBe(PASSED_GATE.operation_id)
-    expect(pinned.recent.map(r => r.id)).toEqual(['op-ticket-i371', RUNNING_GATE.operation_id])
-    expect(pickRuns(ALL, KINTSUGI_ID, 'gone').current?.id).toBe(RUNNING_GATE.operation_id)
-  })
-
-  test('at most five recent runs', () => {
-    const many = Array.from({ length: 9 }, (_, i) => ({ ...(byId(PASSED_GATE.operation_id) as Run), id: `r${i}`, createdAt: i }))
-    expect(pickRuns(many, KINTSUGI_ID, '').recent).toHaveLength(5)
+  test('no runs: none', () => {
+    expect(currentRun([], KINTSUGI_ID)).toBeNull()
   })
 })
 
@@ -174,10 +165,17 @@ describe('drawing words', () => {
     expect(isMoving(null)).toBe(false)
   })
 
-  test('narrow panes drop the timing column, then exit; nothing wraps', () => {
+  test('narrow panes drop the exit column; nothing wraps', () => {
     const stages = (byId(RUNNING_GATE.operation_id) as Run).stages
-    expect(columns(100, stages)).toEqual({ state: 11, stage: 9, exit: 4, time: 6, timing: 64 })
-    expect(columns(40, stages)).toEqual({ state: 11, stage: 9, exit: 4, time: 6, timing: 0 })
-    expect(columns(34, stages)).toEqual({ state: 11, stage: 9, exit: 0, time: 6, timing: 0 })
+    expect(columns(100, stages)).toEqual({ state: 11, stage: 9, exit: 4, time: 6 })
+    expect(columns(35, stages)).toEqual({ state: 11, stage: 9, exit: 4, time: 6 })
+    expect(columns(34, stages)).toEqual({ state: 11, stage: 9, exit: 0, time: 6 })
+  })
+
+  test('the timing track takes the panel width beside the stage names; too narrow, none', () => {
+    const stages = (byId(RUNNING_GATE.operation_id) as Run).stages
+    expect(timingTrack(52, stages)).toBe(42)
+    expect(timingTrack(100, stages)).toBe(90)
+    expect(timingTrack(17, stages)).toBe(0)
   })
 })

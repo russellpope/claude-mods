@@ -10,7 +10,7 @@ export type Stage = {
 
 /** A verification run: a ticket's candidate run or an operator gate run (`kintsugi verify`). */
 export type Run = {
-  /** The operation id: what a press pins. */
+  /** The operation id. */
   id: string
   kind: 'ticket' | 'gate'
   projectId: string
@@ -43,16 +43,10 @@ export type Snapshot = {
   error: string
 }
 
-export type Panel = {
-  /** A run the person pressed; empty while following the newest active run. */
-  pinned: string
-}
-
 declare module 'claude-code' {
   interface PluginState {
     'kintsugi-runs': {
       snapshot: Snapshot
-      panel: Panel
       frame: number
     }
   }

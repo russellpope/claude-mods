@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Panel, Project, Snapshot } from '../types'
-import { commonDirArgv, configPath, isMoving, mainRoot, matchProject, overviewArgv, parseProjects, parseRuns, pickRuns, projectsArgv, unwrap } from './kintsugi'
+import type { Project, Snapshot } from '../types'
+import { commonDirArgv, configPath, currentRun, isMoving, mainRoot, matchProject, overviewArgv, parseProjects, parseRuns, projectsArgv, unwrap } from './kintsugi'
 import { drawPane } from './pane'
 
 export const PANE = 'kintsugi-runs'
@@ -16,7 +16,6 @@ const CALL_MS = 10_000
 export const EMPTY_SNAPSHOT: Snapshot = { at: 0, seenAt: 0, isResolved: false, project: null, runs: [], error: '' }
 
 export const snapshot = atom({ plugin: 'kintsugi-runs', key: 'snapshot' } as const, EMPTY_SNAPSHOT)
-export const panel = atom({ plugin: 'kintsugi-runs', key: 'panel' } as const, { pinned: '' } as Panel)
 export const frame = atom({ plugin: 'kintsugi-runs', key: 'frame' } as const, 0)
 
 /** One kintsugi call: its JSON answer's value, or the error in words. */
@@ -109,8 +108,7 @@ export const register: Register = (on, options) => {
       void (async () => {
         if (options.motion === 'off' || !mayBeOpen) return
         const snap = await read($, snapshot)
-        const { current } = pickRuns(snap.runs, snap.project?.id ?? null, (await read($, panel)).pinned)
-        if (!isMoving(current) || !(await isPaneOpen($))) return
+        if (!isMoving(currentRun(snap.runs, snap.project?.id ?? null)) || !(await isPaneOpen($))) return
         await update($, frame, f => f + 1)
       })().catch(() => undefined)
     })
@@ -127,13 +125,11 @@ export const register: Register = (on, options) => {
       $.ui.resolve(e),
       {
         snap: await read($, snapshot),
-        panel: await read($, panel),
         frame: await read($, frame),
         now: await $.clock.now(),
         cols: e.props.bodyColumns || 80,
         surface: e.surface,
       },
-      { pin: id => void update($, panel, () => ({ pinned: id })) },
     ),
   )
 }

@@ -1,18 +1,15 @@
-import type { Panel, Run, Snapshot, Stage } from '../types'
-import { bar, columns, fmtAgo, fmtDuration, glyph, pickRuns, runDuration, stageDuration, stateColor, stateWord } from './kintsugi'
+import type { Run, Snapshot, Stage } from '../types'
+import { bar, columns, currentRun, fmtAgo, fmtDuration, glyph, runDuration, stageDuration, stateColor, stateWord, timingTrack } from './kintsugi'
 
-export type PaneModel = { snap: Snapshot; panel: Panel; frame: number; now: number; cols: number; surface: string }
-export type PaneActions = { pin: (id: string) => void }
+export type PaneModel = { snap: Snapshot; frame: number; now: number; cols: number; surface: string }
 
 // `ui` is `$.ui.resolve(e)` for a Pane render; typed loosely so the terminal and desktop tables both fit.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type UI = any
 
-const clip = (text: string, width: number): string => (text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`)
-
-export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
-  const { Box, Text, Button } = ui
-  const { snap, panel, frame, now } = m
+export function drawPane(ui: UI, m: PaneModel) {
+  const { Box, Text } = ui
+  const { snap, frame, now } = m
   // Fixed column widths line the rows up on the terminal; other surfaces lay them out themselves.
   const fixed = (width: number) => (m.surface === 'terminal' ? { width, flexShrink: 0 } : {})
   const paint = (state: string) => {
@@ -20,7 +17,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     return c ? { color: c } : { dimColor: true }
   }
   const isAll = snap.isResolved && !snap.project
-  const { current, recent } = pickRuns(snap.runs, snap.project?.id ?? null, panel.pinned)
+  const current = currentRun(snap.runs, snap.project?.id ?? null)
 
   // The project is named only when the tab covers every project; the state keeps its width
   // so a narrow dock truncates the title instead of wrapping the state under it.
@@ -55,7 +52,6 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     const c = columns(m.cols, run.stages)
     const row = (s: Stage) => {
       const d = stageDuration(s, now)
-      const b = c.timing ? bar(s, run, now, c.timing) : null
       return (
         <Box key={`job-${s.name}`} flexDirection="row" gap={1} paddingLeft={2}>
           <Box {...fixed(c.state)}>
@@ -72,12 +68,6 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
           <Box {...fixed(c.time)} justifyContent="flex-end">
             <Text dimColor>{d === null ? '—' : fmtDuration(d)}</Text>
           </Box>
-          {b && b.fill ? (
-            <Box key={`bar-${s.name}`} flexDirection="row" {...fixed(c.timing)}>
-              {b.lead ? <Text dimColor>{'·'.repeat(b.lead)}</Text> : null}
-              <Text {...paint(s.state)}>{'━'.repeat(b.fill)}</Text>
-            </Box>
-          ) : null}
         </Box>
       )
     }
@@ -88,25 +78,38 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     )
   }
 
-  const recentRows = recent.length ? (
-    <Box key="recent" flexDirection="column">
-      <Box key="recent-head" flexDirection="row" gap={2}>
-        <Text bold>Recent</Text>
-        {panel.pinned && current?.id === panel.pinned ? <Button key="follow" label="Follow" plain onPress={() => act.pin('')} /> : null}
-      </Box>
-      {recent.map(r => (
-        <Box key={`rr-${r.id}`} flexDirection="row" gap={1} paddingLeft={2}>
-          <Text {...paint(r.state)}>{glyph(r.state, frame)}</Text>
-          <Button
-            key={`r-${r.id}`}
-            plain
-            label={clip([isAll ? r.project : '', r.sha, r.title, fmtDuration(runDuration(r, now)), fmtAgo(now - r.createdAt)].filter(Boolean).join('  '), Math.max(8, m.cols - 6))}
-            onPress={() => act.pin(r.id)}
-          />
+  // The whole run spread across the panel width beside the stage names, as the console's TIMING block.
+  const timing = (run: Run) => {
+    const track = timingTrack(m.cols, run.stages)
+    if (!track) return null
+    const name = Math.max(5, ...run.stages.map(s => s.name.length))
+    return (
+      <Box key="timing" flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text bold>Timing</Text>
+          <Text dimColor>{fmtDuration(runDuration(run, now))}</Text>
         </Box>
-      ))}
-    </Box>
-  ) : null
+        {run.stages.map(s => {
+          const b = bar(s, run, now, track)
+          return (
+            <Box key={`tl-${s.name}`} flexDirection="row" gap={1}>
+              <Box {...fixed(name)}>
+                <Text dimColor wrap="truncate-end">
+                  {s.name}
+                </Text>
+              </Box>
+              {b.fill ? (
+                <Box key={`bar-${s.name}`} flexDirection="row" {...fixed(track)}>
+                  {b.lead ? <Text dimColor>{'·'.repeat(b.lead)}</Text> : null}
+                  <Text {...paint(s.state)}>{'━'.repeat(b.fill)}</Text>
+                </Box>
+              ) : null}
+            </Box>
+          )
+        })}
+      </Box>
+    )
+  }
 
   const scopeNote = isAll ? (
     <Text key="scope" dimColor>
@@ -140,7 +143,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         empty
       )}
       {current ? jobs(current) : null}
-      {recentRows}
+      {current ? timing(current) : null}
       {footer}
     </Box>
   )

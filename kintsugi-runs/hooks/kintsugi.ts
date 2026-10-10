@@ -75,13 +75,10 @@ export function matchProject(projects: EnrolledProject[], root: string): Project
 const ACTIVE = new Set(['pending', 'running', 'quota_paused', 'uncertain'])
 export const isActive = (state: string): boolean => ACTIVE.has(state)
 
-const RECENT = 5
-
-/** The run the tab follows (or the pinned one), and the other runs newest first. */
-export function pickRuns(runs: Run[], projectId: string | null, pinned: string): { current: Run | null; recent: Run[] } {
+/** The run the tab shows: the newest active one, else the newest, so the last result stays in view. */
+export function currentRun(runs: Run[], projectId: string | null): Run | null {
   const scope = (projectId ? runs.filter(r => r.projectId === projectId) : runs).slice().sort((a, b) => b.createdAt - a.createdAt)
-  const current = (pinned ? scope.find(r => r.id === pinned) : undefined) ?? scope.find(r => isActive(r.state)) ?? scope[0] ?? null
-  return { current, recent: scope.filter(r => r !== current).slice(0, RECENT) }
+  return scope.find(r => isActive(r.state)) ?? scope[0] ?? null
 }
 
 export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
@@ -140,11 +137,17 @@ const EXIT_W = 4
 const TIME_W = 6 // '11m23s'
 const MIN_TIMING = 8
 
-/** Column widths for the jobs table; 0 drops a column. Timing goes first, then exit. */
-export function columns(cols: number, stages: Stage[]): { state: number; stage: number; exit: number; time: number; timing: number } {
-  const stage = Math.max(5, ...stages.map(s => s.name.length))
-  const fixed = INDENT + STATE_W + 1 + stage + 1 + EXIT_W + 1 + TIME_W + 1
-  const timing = cols - fixed >= MIN_TIMING ? cols - fixed : 0
-  const exit = timing === 0 && fixed > cols ? 0 : EXIT_W
-  return { state: STATE_W, stage, exit, time: TIME_W, timing }
+const stageWidth = (stages: Stage[]): number => Math.max(5, ...stages.map(s => s.name.length))
+
+/** Column widths for the jobs table; exit is 0, dropped, when the row would not fit. */
+export function columns(cols: number, stages: Stage[]): { state: number; stage: number; exit: number; time: number } {
+  const stage = stageWidth(stages)
+  const fixed = INDENT + STATE_W + 1 + stage + 1 + EXIT_W + 1 + TIME_W
+  return { state: STATE_W, stage, exit: fixed > cols ? 0 : EXIT_W, time: TIME_W }
+}
+
+/** The timing track: the panel width beside the stage names, the whole run spread across it; 0 when too narrow. */
+export function timingTrack(cols: number, stages: Stage[]): number {
+  const track = cols - stageWidth(stages) - 1
+  return track >= MIN_TIMING ? track : 0
 }

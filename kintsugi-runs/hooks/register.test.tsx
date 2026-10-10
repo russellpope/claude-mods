@@ -123,7 +123,7 @@ describe('refresh (through /kintsugi-runs)', () => {
 })
 
 describe('pane', () => {
-  test('header, pipeline, jobs rows with exit and time, recent runs, and when kintsugi was seen', async ($, on) => {
+  test('header, pipeline, jobs rows with exit and time, timing, and when kintsugi was seen', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})
     await setup(on).open($)
@@ -137,43 +137,54 @@ describe('pane', () => {
     const test = await ui.find({ type: 'Box', key: 'job-test' })
     expect(test?.text).toMatch(/⠋ running\s*test\s*—\s*1h01m/)
     expect((await ui.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/✓ passed\s*check\s*0\s*38s/)
-    expect(await ui.find({ type: 'Button', key: 'r-op-ticket-i371' })).toBeDefined()
-    expect(await ui.find({ type: 'Button', key: `r-${PASSED_GATE.operation_id}` })).toBeDefined()
-    // Another project's run is not listed.
-    expect(await ui.find({ type: 'Button', key: 'r-op-hansa' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^seen 0s ago$/ })).toBeDefined()
-    // Following: no Follow button to press.
-    expect(await ui.find({ type: 'Button', key: 'follow' })).toBeUndefined()
     await ui.unmount()
   })
 
-  test('pressing a recent run pins it; Follow goes back to the active run', async ($, on) => {
+  test('timing: the whole run spans the panel width, each stage placed and sized within it', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    host(on, {})
+    await setup(on).open($)
+    const ui = await mount($, 100)
+    expect(await ui.find({ type: 'Text', text: /^Timing$/ })).toBeDefined()
+    // The run so far: 1h02m.
+    expect(await ui.find({ type: 'Text', text: /^1h02m$/ })).toBeDefined()
+    // 100 columns less the stage names (9) and a gap: a 90-cell track.
+    const test = await ui.find({ type: 'Box', key: 'bar-test' })
+    expect(test?.props).toMatchObject({ width: 90 })
+    expect(test?.text).toMatch(/^·━{89}$/)
+    expect((await ui.find({ type: 'Box', key: 'bar-fmt' }))?.text).toBe('━')
+    // Not started: a name and no bar.
+    expect(await ui.find({ type: 'Box', key: 'bar-skip-gate' })).toBeUndefined()
+    expect(await ui.find({ type: 'Box', key: 'tl-skip-gate' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('only the active run: no recent list, nothing to pin', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})
     await setup(on).open($)
     const ui = await mount($)
-    await ui.press({ key: `r-${PASSED_GATE.operation_id}` })
-    expect(await ui.find({ type: 'Text', text: /^verify full · main · 778107f$/ })).toBeDefined()
-    expect((await ui.find({ type: 'Box', key: 'job-test' }))?.text).toMatch(/✓ passed\s*test\s*0\s*1h29m/)
-    await ui.press({ key: 'follow' })
-    expect(await ui.find({ type: 'Text', text: /^verify full · main · eb598c9$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Recent$/ })).toBeUndefined()
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+    expect(await ui.find({ type: 'Text', text: /778107f/ })).toBeUndefined()
     await ui.unmount()
   })
 
-  test('a narrow pane drops the timing bars, then exit codes', async ($, on) => {
+  test('a narrow pane drops exit codes, then the timing section', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})
     await setup(on).open($)
-    const wide = await mount($, 100)
-    expect(await wide.find({ type: 'Box', key: 'bar-test' })).toBeDefined()
-    await wide.unmount()
     const mid = await mount($, 40)
-    expect(await mid.find({ type: 'Box', key: 'bar-test' })).toBeUndefined()
     expect((await mid.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/check\s*0\s*38s/)
+    expect(await mid.find({ type: 'Box', key: 'bar-test' })).toBeDefined()
     await mid.unmount()
     const narrow = await mount($, 34)
     expect((await narrow.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/check\s*38s/)
     await narrow.unmount()
+    const tiny = await mount($, 17)
+    expect(await tiny.find({ type: 'Text', text: /^Timing$/ })).toBeUndefined()
+    await tiny.unmount()
   })
 
   test('nothing yet: a plain line', async ($, on) => {
