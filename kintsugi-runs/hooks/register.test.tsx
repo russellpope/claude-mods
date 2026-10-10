@@ -141,19 +141,20 @@ describe('pane', () => {
     await ui.unmount()
   })
 
-  test('timing: the whole run spans the panel width, each stage placed and sized within it', async ($, on) => {
+  test('timing while test runs: finished stages to scale on the left, test filling against its usual length on the right', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})
     await setup(on).open($)
     const ui = await mount($, 100)
     expect(await ui.find({ type: 'Text', text: /^Timing$/ })).toBeDefined()
-    // The run so far: 1h02m.
-    expect(await ui.find({ type: 'Text', text: /^1h02m$/ })).toBeDefined()
-    // 100 columns less the stage names (9) and a gap: a 90-cell track.
+    // Usual: the passed gate run in the overview took 1h29m over test.
+    expect(await ui.find({ type: 'Text', text: /^test 1h01m of ~1h29m$/ })).toBeDefined()
+    // 100 columns less the stage names (9) and a gap: a 90-cell track, test on its right 45.
     const test = await ui.find({ type: 'Box', key: 'bar-test' })
     expect(test?.props).toMatchObject({ width: 90 })
-    expect(test?.text).toMatch(/^·━{89}$/)
-    expect((await ui.find({ type: 'Box', key: 'bar-fmt' }))?.text).toBe('━')
+    expect(test?.text).toMatch(/^ {45}━{31}╌{14}$/)
+    expect((await ui.find({ type: 'Box', key: 'bar-fmt' }))?.text).toBe('━━')
+    expect((await ui.find({ type: 'Box', key: 'bar-lint' }))?.text).toMatch(/^ {30}━{14}$/)
     // Not started: a name and no bar.
     expect(await ui.find({ type: 'Box', key: 'bar-skip-gate' })).toBeUndefined()
     expect(await ui.find({ type: 'Box', key: 'tl-skip-gate' })).toBeDefined()

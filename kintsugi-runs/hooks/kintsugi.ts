@@ -128,6 +128,78 @@ export function bar(s: Stage, run: Run, now: number, width: number): { lead: num
   return { lead, fill: Math.min(fill, width - lead) }
 }
 
+/** Each stage's median length in this repo's passed runs of the same kind (gate runs: the same profile). */
+export function usualDurations(runs: Run[], run: Run): Record<string, number> {
+  const same = runs.filter(r => r.id !== run.id && r.projectId === run.projectId && r.kind === run.kind && (r.kind === 'ticket' || r.title === run.title) && r.state === 'succeeded')
+  const lengths: Record<string, number[]> = {}
+  for (const r of same)
+    for (const s of r.stages)
+      if (s.state === 'succeeded' && s.startedAt !== null && s.finishedAt !== null) (lengths[s.name] ??= []).push(s.finishedAt - s.startedAt)
+  const usual: Record<string, number> = {}
+  for (const [name, ms] of Object.entries(lengths)) {
+    const sorted = ms.sort((a, b) => a - b)
+    const mid = sorted.length >> 1
+    usual[name] = sorted.length % 2 ? (sorted[mid] as number) : Math.round(((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2)
+  }
+  return usual
+}
+
+export type Segment = { kind: 'gap' | 'fill' | 'ghost'; n: number }
+
+/** A running stage usually shorter than this is drawn at true scale, not given half the bar. */
+export const TINY_MS = 60_000
+const SWEEP = 3
+
+const segments = (lead: number, ...rest: Segment[]): Segment[] => [{ kind: 'gap', n: lead }, ...rest.filter(s => s.n > 0)]
+
+/** The stages that split the bar: running, and not usually tiny. */
+const longRunning = (run: Run, usual: Record<string, number>): Stage[] =>
+  isActive(run.state) ? run.stages.filter(s => s.state === 'running' && s.startedAt !== null && !((usual[s.name] ?? Infinity) < TINY_MS)) : []
+
+/**
+ * Each stage's cells on a `width`-cell timing track. While a long stage runs, the finished
+ * stages share the left half at their true proportions and the running stage fills the right
+ * half against its usual length (or a block sweeps when it has none); otherwise the whole run
+ * is at true scale. Each change of running stage re-scales the finished ones together.
+ */
+export function timeline(run: Run, now: number, width: number, usual: Record<string, number>, frame: number): Segment[][] {
+  if (!longRunning(run, usual).length)
+    return run.stages.map(s => {
+      const b = bar(s, run, now, width)
+      return b.fill ? segments(b.lead, { kind: 'fill', n: b.fill }) : []
+    })
+  const half = Math.floor(width / 2)
+  const left = width - half
+  const start = runStart(run)
+  const scale = Math.max(1, Math.max(0, ...run.stages.map(s => s.finishedAt ?? 0)) - start)
+  return run.stages.map(s => {
+    if (s.startedAt === null) return []
+    if (s.finishedAt !== null) {
+      const lead = Math.min(left - 1, Math.max(0, Math.floor(((s.startedAt - start) / scale) * left)))
+      return segments(lead, { kind: 'fill', n: Math.min(left - lead, Math.max(1, Math.round(((s.finishedAt - s.startedAt) / scale) * left))) })
+    }
+    if (s.state !== 'running') return []
+    const u = usual[s.name]
+    if (u === undefined) {
+      const pos = frame % (half - SWEEP + 1)
+      return segments(left, { kind: 'ghost', n: pos }, { kind: 'fill', n: SWEEP }, { kind: 'ghost', n: half - pos - SWEEP })
+    }
+    const elapsed = now - s.startedAt
+    const fill = elapsed >= u ? half : Math.max(1, Math.round((elapsed / u) * half))
+    return segments(left, { kind: 'fill', n: fill }, { kind: 'ghost', n: half - fill })
+  })
+}
+
+/** The timing heading: the long running stage against its usual length, else the run's total. */
+export function timingHead(run: Run, now: number, usual: Record<string, number>): string {
+  const s = longRunning(run, usual).sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))[0]
+  if (!s || s.startedAt === null) return fmtDuration(runDuration(run, now))
+  const elapsed = now - s.startedAt
+  const u = usual[s.name]
+  if (u === undefined) return `${s.name} ${fmtDuration(elapsed)}`
+  return `${s.name} ${fmtDuration(elapsed)} of ~${fmtDuration(u)}${elapsed > u ? ` (+${fmtDuration(elapsed - u)})` : ''}`
+}
+
 /** The spinner turns only while the shown run is active with a stage running. */
 export const isMoving = (run: Run | null): boolean => !!run && isActive(run.state) && run.stages.some(s => s.state === 'running')
 

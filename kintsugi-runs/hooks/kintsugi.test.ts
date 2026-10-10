@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Run, Stage } from '../types'
+import type { Segment } from './kintsugi'
 import { FAILED_TICKET, HANSA_GATE, KINTSUGI_ID, NOW, PASSED_GATE, PROJECTS, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
 import {
   SPINNER,
@@ -21,8 +22,11 @@ import {
   stageDuration,
   stateColor,
   stateWord,
+  timeline,
+  timingHead,
   timingTrack,
   unwrap,
+  usualDurations,
 } from './kintsugi'
 
 const runsOf = (items: object[], ops: object[]): Run[] => {
@@ -177,5 +181,71 @@ describe('drawing words', () => {
     expect(timingTrack(52, stages)).toBe(42)
     expect(timingTrack(100, stages)).toBe(90)
     expect(timingTrack(17, stages)).toBe(0)
+  })
+})
+
+// The mockup's run: fmt 0–2s, check 2–19s, lint 19–35s, test running from 35s, skip-gate queued.
+const st = (name: string, state: string, a: number | null, b: number | null): Stage => ({ name, state, exitCode: null, startedAt: a, finishedAt: b })
+const MOCK: Run = {
+  id: 'mock', kind: 'gate', projectId: KINTSUGI_ID, project: 'kintsugi', title: 'verify full', ref: 'main', sha: 'abc1234',
+  state: 'running', createdAt: 0, updatedAt: 0, detail: '',
+  stages: [st('fmt', 'succeeded', 0, 2000), st('check', 'succeeded', 2000, 19_000), st('lint', 'succeeded', 19_000, 35_000), st('test', 'running', 35_000, null), st('skip-gate', 'pending', null, null)],
+}
+const USUAL = { fmt: 2000, check: 17_000, lint: 16_000, test: 63 * 60_000, 'skip-gate': 1000 }
+const g = (n: number): Segment => ({ kind: 'gap', n })
+const f = (n: number): Segment => ({ kind: 'fill', n })
+const o = (n: number): Segment => ({ kind: 'ghost', n })
+
+describe('usual stage lengths', () => {
+  test("medians from this repo's passed runs of the same kind; the run itself, failures and other projects left out", () => {
+    const passed = byId(PASSED_GATE.operation_id) as Run
+    const withTest = (id: string, ms: number): Run => ({ ...passed, id, stages: passed.stages.map(x => (x.name === 'test' ? { ...x, finishedAt: (x.startedAt ?? 0) + ms } : x)) })
+    // A failed run of the same kind took 9_000_000 over test: not counted.
+    const runs = [...ALL, withTest('p2', 3_000_000), withTest('p3', 4_000_000), { ...withTest('f1', 9_000_000), state: 'failed' }]
+    const usual = usualDurations(runs, byId(RUNNING_GATE.operation_id) as Run)
+    expect(usual.test).toBe(4_000_000)
+    expect(usual.fmt).toBe(1791593690019 - 1791593688254)
+    // Only the running gate's own history: hansa's and the failed ticket's stages do not count.
+    expect(usualDurations([{ ...(byId('op-hansa') as Run), state: 'succeeded' }, byId('op-ticket-i371') as Run], byId(RUNNING_GATE.operation_id) as Run)).toEqual({})
+  })
+})
+
+describe('timing while a long stage runs (finished stages to scale | the running stage capped at half)', () => {
+  test('10 minutes in: early stages share the left half; test fills against its usual length on the right', () => {
+    expect(timeline(MOCK, 600_000, 42, USUAL, 0)).toEqual([[g(0), f(1)], [g(1), f(10)], [g(11), f(10)], [g(21), f(3), o(18)], []])
+    expect(timingHead(MOCK, 600_000, USUAL)).toBe('test 9m25s of ~1h03m')
+  })
+
+  test('past its usual length: the half is full and the heading says by how much', () => {
+    expect(timeline(MOCK, 72 * 60_000, 42, USUAL, 0)[3]).toEqual([g(21), f(21)])
+    expect(timingHead(MOCK, 72 * 60_000, USUAL)).toBe('test 1h11m of ~1h03m (+8m25s)')
+  })
+
+  test('no history for the running stage: a block sweeps across its half as the spinner turns', () => {
+    expect(timeline(MOCK, 600_000, 42, {}, 0)[3]).toEqual([g(21), f(3), o(18)])
+    expect(timeline(MOCK, 600_000, 42, {}, 5)[3]).toEqual([g(21), o(5), f(3), o(13)])
+    expect(timingHead(MOCK, 600_000, {})).toBe('test 9m25s')
+  })
+
+  test('the next stage starts: everything finished re-scales together', () => {
+    const done = { ...MOCK, stages: [...MOCK.stages.slice(0, 3), st('test', 'succeeded', 35_000, 75 * 60_000), st('verify', 'running', 75 * 60_000, null)] }
+    const rows = timeline(done, 75 * 60_000 + 30_000, 42, { verify: 10 * 60_000 }, 0)
+    expect(rows.slice(0, 4)).toEqual([[g(0), f(1)], [g(0), f(1)], [g(0), f(1)], [g(0), f(21)]])
+    expect(rows[4]).toEqual([g(21), f(1), o(20)])
+  })
+
+  test('a running stage that is usually tiny is drawn at true scale, not given half the bar', () => {
+    const last = { ...MOCK, stages: [...MOCK.stages.slice(0, 3), st('test', 'succeeded', 35_000, 75 * 60_000), st('skip-gate', 'running', 75 * 60_000, null)] }
+    const now = 75 * 60_000 + 500
+    const rows = timeline(last, now, 42, USUAL, 0)
+    expect(rows[3]).toEqual([g(0), f(42)])
+    expect(rows[4]).toEqual([g(41), f(1)])
+    expect(timingHead(last, now, USUAL)).toBe('1h15m')
+  })
+
+  test('a finished run: true scale across the whole track', () => {
+    const fin = { ...MOCK, state: 'succeeded', stages: [...MOCK.stages.slice(0, 3), st('test', 'succeeded', 35_000, 75 * 60_000), st('skip-gate', 'succeeded', 75 * 60_000, 75 * 60_000 + 1000)] }
+    expect(timeline(fin, 99 * 60_000, 42, USUAL, 0)).toEqual([[g(0), f(1)], [g(0), f(1)], [g(0), f(1)], [g(0), f(42)], [g(41), f(1)]])
+    expect(timingHead(fin, 99 * 60_000, USUAL)).toBe('1h15m')
   })
 })

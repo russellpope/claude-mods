@@ -1,5 +1,6 @@
 import type { Run, Snapshot, Stage } from '../types'
-import { bar, columns, currentRun, fmtAgo, fmtDuration, glyph, runDuration, stageDuration, stateColor, stateWord, timingTrack } from './kintsugi'
+import { columns, currentRun, fmtAgo, fmtDuration, glyph, stageDuration, stateColor, stateWord, timeline, timingHead, timingTrack, usualDurations } from './kintsugi'
+import type { Segment } from './kintsugi'
 
 export type PaneModel = { snap: Snapshot; frame: number; now: number; cols: number; surface: string }
 
@@ -78,19 +79,37 @@ export function drawPane(ui: UI, m: PaneModel) {
     )
   }
 
-  // The whole run spread across the panel width beside the stage names, as the console's TIMING block.
+  // The console's TIMING block across the panel width. While a long stage runs, the finished
+  // stages share the left half to scale and the running one fills the right half against its
+  // usual length; see timeline().
   const timing = (run: Run) => {
     const track = timingTrack(m.cols, run.stages)
     if (!track) return null
     const name = Math.max(5, ...run.stages.map(s => s.name.length))
+    const usual = usualDurations(snap.runs, run)
+    const rows = timeline(run, now, track, usual, frame)
+    const cell = (s: Stage, seg: Segment, i: number) =>
+      seg.n === 0 ? null : seg.kind === 'gap' ? (
+        <Text key={i}>{' '.repeat(seg.n)}</Text>
+      ) : seg.kind === 'fill' ? (
+        <Text key={i} {...paint(s.state)}>
+          {'━'.repeat(seg.n)}
+        </Text>
+      ) : (
+        <Text key={i} dimColor>
+          {'╌'.repeat(seg.n)}
+        </Text>
+      )
     return (
       <Box key="timing" flexDirection="column">
-        <Box flexDirection="row" justifyContent="space-between">
+        <Box flexDirection="row" justifyContent="space-between" gap={2}>
           <Text bold>Timing</Text>
-          <Text dimColor>{fmtDuration(runDuration(run, now))}</Text>
+          <Text dimColor wrap="truncate-end">
+            {timingHead(run, now, usual)}
+          </Text>
         </Box>
-        {run.stages.map(s => {
-          const b = bar(s, run, now, track)
+        {run.stages.map((s, i) => {
+          const segs = rows[i] ?? []
           return (
             <Box key={`tl-${s.name}`} flexDirection="row" gap={1}>
               <Box {...fixed(name)}>
@@ -98,10 +117,9 @@ export function drawPane(ui: UI, m: PaneModel) {
                   {s.name}
                 </Text>
               </Box>
-              {b.fill ? (
+              {segs.length ? (
                 <Box key={`bar-${s.name}`} flexDirection="row" {...fixed(track)}>
-                  {b.lead ? <Text dimColor>{'·'.repeat(b.lead)}</Text> : null}
-                  <Text {...paint(s.state)}>{'━'.repeat(b.fill)}</Text>
+                  {segs.map((seg, j) => cell(s, seg, j))}
                 </Box>
               ) : null}
             </Box>
