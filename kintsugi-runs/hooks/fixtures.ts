@@ -51,6 +51,24 @@ export const PASSED_GATE = {
   ],
 }
 
+/** A gate run queued behind the running one: newer, no stages yet (shape from a real overview, 2026-10-12). */
+export const QUEUED_GATE = {
+  operation_id: 'bdfa2828-d68e-4ff6-a40e-9d5b0e12737b',
+  project_id: KINTSUGI_ID,
+  project: 'kintsugi',
+  ref_name: 'refs/heads/main',
+  commit: 'f39b29456ca356c253068a93f4aa28577fcfcea3',
+  short_commit: 'f39b294',
+  profile: 'full',
+  state: 'pending',
+  version: '1',
+  created_at_ms: 1791608700000,
+  updated_at_ms: 1791608700000,
+  queue_reason: 'waiting: run a8c231fe-c2fb-4ee8-818b-18d379f673cd active',
+  detail: null,
+  stages: [],
+}
+
 /** A ticket's candidate run, newer than everything else but finished and failed. */
 export const FAILED_TICKET = {
   run_id: 'run-1',
