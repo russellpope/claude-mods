@@ -70,7 +70,7 @@ agent-tree · kintsugi (w9:pR)          [Tree | All]
 
 (The crab above is a placeholder; the sprite is drawn in implementation.)
 
-- **Status glyphs:** `●` working, `◌` idle, `!` blocked (herdr `blocked` or a `BLOCKED:` title), `✓` done (herdr `done` or a `DONE:` title), `✗` pane gone. A gone pane keeps its last known numbers.
+- **Status glyphs:** `●` working, `◌` idle, `!` blocked (herdr `blocked` or a `BLOCKED:` title), `✓` done (a `DONE:` title; herdr's `done` only means a turn ended and shows as idle, per the final review on 2026-10-08), `✗` pane gone. A gone pane keeps its last known numbers.
 - **Finished** (done or gone) is collapsed by default. A lead with live descendants stays in place in the tree.
 - **Totals** sum the tree, Claude rows only; cost is an estimate, not a bill. In All, totals are labelled as Claude-only.
 - **All view:** one line per agent, grouped by repo. `~/worktrees/<repo>-*` folds into `<repo>`.
@@ -106,7 +106,7 @@ None of these throws, blanks the pane, or blocks a tool call:
 
 `claude plugin test agent-tree` covers:
 
-1. The ledger writer, on herdr output fixtures for `agent start`, `workspace create` and `pane split`: the right edges get written.
+1. The ledger writer, on `herdr agent start` output (`agent_started`), and on the before/after agent-list diff when that output was swallowed: the right edges get written. (Amended 2026-10-08: only `agent start` makes an edge, per plan deviation 2.)
 2. **Negative control:** a Bash command that only mentions `herdr agent start` (inside `echo`, or in a quoted string) writes no edge.
 3. Tree building: depth, cycles, and rejecting a reused pane id held by a different session.
 4. Transcript parsing: model, context tokens, running sums, cost; incremental reads.

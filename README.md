@@ -9,6 +9,7 @@ Mods for [Claude Code](https://claude.com/claude-code): panes, status entries an
 | Mod | What it does |
 | --- | --- |
 | [outputs-pane](outputs-pane/) | Side pane listing the files Claude writes or edits, split into planning (markdown), code and scratch, with a filter. Click a file to open it in your editor. |
+| [agent-tree](agent-tree/) | Pane of the herdr agents this session spawned, and theirs: status, model, context, cost and ticket, with a global view and a crab. `/agent-tree` toggles it. |
 
 ## Installing a mod
 
