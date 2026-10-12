@@ -2,25 +2,33 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
 import type { Snapshot } from '../types'
-import { FAILED_TICKET, HANSA_GATE, NOW, PASSED_GATE, PROJECTS, QUEUED_GATE, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
+import { FAILED_TICKET, HANSA_GATE, NOW, PASSED_GATE, PASSED_TEST_LOG, PROJECTS, QUEUED_GATE, RUNNING_GATE, RUNNING_TEST_LOG, UNAVAILABLE, overview } from './fixtures'
 
 type On = Parameters<TestBody>[1]
 type E = Parameters<TestBody>[0]
 
 // An op hook (process.run, fs.*) answers { value }.
-const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+const out = (stdout: string, exitCode = 0, isStdoutTruncated = false) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated, isStderrTruncated: false } })
 const CWD = '/Users/me/worktrees/kintsugi-moyf'
 const KINTSUGI_GIT = '/Users/me/Projects/github.com/kintsugi/.git\n'
 const OVERVIEW = overview([FAILED_TICKET], [RUNNING_GATE, PASSED_GATE, HANSA_GATE])
 const PANE_PROPS = (bodyColumns: number) => ({ title: 'kintsugi', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} })
 
-/** Answers git and kintsugi by argv, and records every argv. */
-const host = (on: On, answers: { git?: string; projects?: string; overview?: () => string | Error }) => {
+/** A `run logs` answer: the log, or kintsugi failing, or a log cut at the engine's 4 MiB. */
+type LogAnswer = string | Error | { cut: string }
+
+/** Answers git and kintsugi by argv, and records every argv. Logs, by operation id, default to none. */
+const host = (on: On, answers: { git?: string; projects?: string; overview?: () => string | Error; logs?: (id: string) => LogAnswer }) => {
   const calls: string[][] = []
   on('process.run', async (_$, e) => {
     calls.push([...e.argv])
     if (e.argv[0] === 'git') return out(answers.git ?? KINTSUGI_GIT)
     if (e.argv.includes('project')) return out(answers.projects ?? PROJECTS)
+    if (e.argv.includes('logs')) {
+      const log = answers.logs ? answers.logs(e.argv[e.argv.indexOf('--operation-id') + 1] ?? '') : ''
+      if (log instanceof Error) throw log
+      return typeof log === 'string' ? out(log) : out(log.cut, 0, true)
+    }
     const o = answers.overview ? answers.overview() : OVERVIEW
     if (o instanceof Error) throw o
     return out(o, o === UNAVAILABLE ? 2 : 0)
@@ -238,6 +246,119 @@ describe('pane', () => {
   })
 })
 
+const LOGS = (id: string): LogAnswer => (id === RUNNING_GATE.operation_id ? RUNNING_TEST_LOG : id === PASSED_GATE.operation_id ? PASSED_TEST_LOG : '')
+const LOGS_ARGV = (id: string) => ['kintsugi', '--config', '/home/me/.config/kintsugi/config.toml', 'run', 'logs', '--operation-id', id, '--stage', 'test']
+const FAILED_NAME = 'inbox::production_review_tests::i261_socket_local_settings_end_the_review'
+
+describe('tests section', () => {
+  test('while test runs: the tests run so far against the last passed run, the tally, the failed test by name', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    const calls = host(on, { logs: LOGS })
+    await setup(on).open($)
+    expect(calls).toContainEqual(LOGS_ARGV(RUNNING_GATE.operation_id))
+    const ui = await mount($)
+    expect(await ui.find({ type: 'Text', text: /^Tests$/ })).toBeDefined()
+    // Five reported so far; the passed run reported six.
+    expect(await ui.find({ type: 'Text', text: /^5 of ~6 run$/ })).toBeDefined()
+    // A narrow pane moves the count under the label instead of squeezing "Tests".
+    expect((await ui.find({ type: 'Box', key: 'tests-head' }))?.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' })
+    expect((await ui.find({ type: 'Box', key: 'tests-label' }))?.props).toMatchObject({ flexShrink: 0 })
+    // Whole items in a wrapping row, as the pipeline.
+    expect((await ui.find({ type: 'Box', key: 'tally' }))?.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 })
+    expect((await ui.find({ type: 'Box', key: 'tally-passed' }))?.text).toBe('✓ 3 passed ·')
+    expect((await ui.find({ type: 'Box', key: 'tally-failed' }))?.text).toBe('✗ 1 failed ·')
+    expect((await ui.find({ type: 'Box', key: 'tally-ignored' }))?.text).toBe('1 ignored')
+    expect(await ui.find({ type: 'Text', text: '✗ 1 failed' })).toMatchObject({ props: { color: 'error' } })
+    // The name gives way from its left, so the test's own name at the end stays in view.
+    expect((await ui.find({ type: 'Box', key: 'failed-0' }))?.text).toMatch(new RegExp(`^✗\\s*${FAILED_NAME}$`))
+    expect(await ui.find({ type: 'Text', text: FAILED_NAME })).toMatchObject({ props: { color: 'error', wrap: 'truncate-start' } })
+    await ui.unmount()
+  })
+
+  test('no failures: the failed count is dim, and no names', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    host(on, { logs: () => PASSED_TEST_LOG })
+    await setup(on).open($)
+    const ui = await mount($)
+    expect(await ui.find({ type: 'Text', text: '✗ 0 failed' })).toMatchObject({ props: { dimColor: true } })
+    expect(await ui.find({ type: 'Box', key: 'failed-0' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('more than three failures: three by name, then how many more', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    const five = [1, 2, 3, 4, 5].map(i => `test t::f${i} ... FAILED`).join('\n')
+    host(on, { logs: id => (id === RUNNING_GATE.operation_id ? five : PASSED_TEST_LOG) })
+    await setup(on).open($)
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'failed-2' }))?.text).toMatch(/t::f3$/)
+    expect(await ui.find({ type: 'Box', key: 'failed-3' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^\+2 more$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a finished test stage: its final count, no usual total', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    host(on, { overview: () => overview([], [PASSED_GATE]), logs: LOGS })
+    await setup(on).open($)
+    const ui = await mount($)
+    expect(await ui.find({ type: 'Text', text: /^6 run$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the count belongs to its run: when another run is shown, the section goes', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    let n = 0
+    host(on, { overview: () => (n++ === 0 ? OVERVIEW : overview([], [QUEUED_GATE, PASSED_GATE])), logs: LOGS })
+    const pane = setup(on)
+    await pane.open($)
+    // Close, then open on the next overview: only the queued run is under way now.
+    await $.command.run({ command: 'kintsugi-runs', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+    await pane.open($)
+    const ui = await mount($)
+    expect(await ui.find({ type: 'Text', text: /^verify full · main · f39b294$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Tests$/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  const unread: [string, LogAnswer][] = [
+    ['no test lines in the log', 'RUN LOGS operation=x stage=test\n'],
+    ['kintsugi failing', new Error('spawn kintsugi ENOENT')],
+    ['a log cut at 4 MiB', { cut: RUNNING_TEST_LOG }],
+  ]
+  for (const [why, log] of unread)
+    test(`no section: ${why}; the rest of the tab stays`, async ($, on) => {
+      on('clock.now', async () => ({ value: NOW }))
+      host(on, { logs: id => (id === RUNNING_GATE.operation_id ? log : PASSED_TEST_LOG) })
+      await setup(on).open($)
+      const ui = await mount($)
+      expect(await ui.find({ type: 'Text', text: /^Tests$/ })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: /^Timing$/ })).toBeDefined()
+      await ui.unmount()
+    })
+
+  // Lint still running: the gate run's test stage has not started.
+  const BEFORE_TEST = {
+    ...RUNNING_GATE,
+    stages: RUNNING_GATE.stages.map(st =>
+      st.name === 'lint' ? { ...st, state: 'running', finished_at_ms: null, exit_code: null } : st.name === 'test' ? { ...st, state: 'pending', started_at_ms: null } : st,
+    ),
+  }
+  // A ticket run's test stage, started: run logs reads operator runs only.
+  const TICKET_TESTING = { ...FAILED_TICKET, state: 'running', stages: [{ ...FAILED_TICKET.stages[1], state: 'running', started_at_ms: 1791608400100 }] }
+  for (const [why, ops, items] of [
+    ['a run only queued', [QUEUED_GATE], []],
+    ['a test stage not started yet', [BEFORE_TEST], []],
+    ['a ticket run', [], [TICKET_TESTING]],
+  ] as [string, object[], object[]][])
+    test(`no log is read for ${why}`, async ($, on) => {
+      on('clock.now', async () => ({ value: NOW }))
+      const calls = host(on, { overview: () => overview(items, ops), logs: LOGS })
+      await setup(on).open($)
+      expect(calls.filter(c => c.includes('logs'))).toEqual([])
+    })
+})
+
 describe('timers', () => {
   const start = async ($: E, on: On) => {
     on('session.start', async (_$, e) => ({ cwd: e.cwd }))
@@ -304,5 +425,53 @@ describe('timers', () => {
     expect(calls.filter(c => c.includes('overview')).length - before).toBe(3)
     // The project is looked up once.
     expect(calls.filter(c => c.includes('project')).length).toBe(1)
+  })
+
+  test("while a test stage runs and the tab is open, its log is read every 5 s; the passed run's once", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const calls = host(on, { logs: LOGS })
+    const pane = setup(on)
+    await start($, on)
+    await pane.open($)
+    const reads = (id: string) => calls.filter(c => c.includes('logs') && c.includes(id)).length
+    const before = reads(RUNNING_GATE.operation_id)
+    expect(before).toBe(1)
+    await clock.advance(10_000)
+    expect(reads(RUNNING_GATE.operation_id) - before).toBe(2)
+    expect(reads(PASSED_GATE.operation_id)).toBe(1)
+  })
+
+  test('a finished test stage is read once, then left alone', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const calls = host(on, { overview: () => overview([], [PASSED_GATE]), logs: LOGS })
+    const pane = setup(on)
+    await start($, on)
+    await pane.open($)
+    await clock.advance(10_000)
+    expect(calls.filter(c => c.includes('logs'))).toEqual([LOGS_ARGV(PASSED_GATE.operation_id)])
+  })
+
+  test('closing the tab stops the log reads', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const calls = host(on, { logs: LOGS })
+    const pane = setup(on)
+    await start($, on)
+    await pane.open($)
+    await $.command.run({ command: 'kintsugi-runs', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+    const before = calls.filter(c => c.includes('logs')).length
+    await clock.advance(10_000)
+    expect(calls.filter(c => c.includes('logs')).length).toBe(before)
+  })
+
+  test('a finished stage whose log could not be read is read again', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    let n = 0
+    const calls = host(on, { overview: () => overview([], [PASSED_GATE]), logs: () => (n++ === 0 ? new Error('kintsugi busy') : PASSED_TEST_LOG) })
+    const pane = setup(on)
+    await start($, on)
+    await pane.open($)
+    await clock.advance(10_000)
+    // Failed once, read on the next tick, then final.
+    expect(calls.filter(c => c.includes('logs')).length).toBe(2)
   })
 })

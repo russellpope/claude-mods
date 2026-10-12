@@ -1,8 +1,25 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Project, Snapshot } from '../types'
-import { commonDirArgv, configPath, currentRun, isMoving, mainRoot, matchProject, overviewArgv, parseProjects, parseRuns, projectsArgv, unwrap } from './kintsugi'
+import type { Project, Snapshot, TestTally, TestsView } from '../types'
+import {
+  TEST_STAGE,
+  commonDirArgv,
+  configPath,
+  countTests,
+  currentRun,
+  isMoving,
+  logsArgv,
+  mainRoot,
+  matchProject,
+  overviewArgv,
+  parseProjects,
+  parseRuns,
+  projectsArgv,
+  testCount,
+  testsBaseline,
+  unwrap,
+} from './kintsugi'
 import { drawPane } from './pane'
 
 export const PANE = 'kintsugi-runs'
@@ -12,11 +29,18 @@ export const PANE_TITLE = 'kintsugi'
 const POLL_MS = 2000
 const FRAME_MS = 250
 const CALL_MS = 10_000
+// A test stage's log is read whole (~12 ms for 380 KB), so less often than the overview.
+const TESTS_MS = 5000
 
 export const EMPTY_SNAPSHOT: Snapshot = { at: 0, seenAt: 0, isResolved: false, project: null, runs: [], error: '' }
 
 export const snapshot = atom({ plugin: 'kintsugi-runs', key: 'snapshot' } as const, EMPTY_SNAPSHOT)
 export const frame = atom({ plugin: 'kintsugi-runs', key: 'frame' } as const, 0)
+
+export const EMPTY_TESTS: TestsView = { runId: '', tally: null, isFinal: false, baseId: '', total: null }
+export const tests = atom({ plugin: 'kintsugi-runs', key: 'tests' } as const, EMPTY_TESTS)
+
+const kintsugiConfig = async ($: EngineInterface): Promise<string> => configPath(await $.env.get('KINTSUGI_CONFIG'), (await $.env.get('HOME')) ?? '')
 
 /** One kintsugi call: its JSON answer's value, or the error in words. */
 async function ask($: EngineInterface, argv: string[]): Promise<{ value: unknown } | { error: string }> {
@@ -42,7 +66,7 @@ async function findProject($: EngineInterface, config: string): Promise<Project 
 
 async function refreshOnce($: EngineInterface): Promise<void> {
   const at = await $.clock.now()
-  const config = configPath(await $.env.get('KINTSUGI_CONFIG'), (await $.env.get('HOME')) ?? '')
+  const config = await kintsugiConfig($)
   const prev = await read($, snapshot)
   // Looked up once; the snapshot keeps it across a reload.
   const project = prev.isResolved ? prev.project : await findProject($, config)
@@ -68,6 +92,51 @@ async function refresh($: EngineInterface): Promise<void> {
   }
 }
 
+/** A run's test stage log, counted: null when kintsugi fails, the log was cut short, or it holds no tests. */
+async function readTally($: EngineInterface, config: string, id: string): Promise<TestTally | null> {
+  try {
+    const r = await $.process.run(logsArgv(config, id), { timeoutMs: CALL_MS })
+    // Past the engine's 4 MiB the count would come up short: better no section than a wrong one.
+    // kintsugi's error answers hold no test lines, so they count as none.
+    return r.isStdoutTruncated ? null : countTests(r.stdout)
+  } catch {
+    return null
+  }
+}
+
+/** Counts the shown gate run's test stage once it has started; once more after it ends, then no more. */
+async function refreshTestsOnce($: EngineInterface): Promise<void> {
+  const snap = await read($, snapshot)
+  const run = currentRun(snap.runs, snap.project?.id ?? null)
+  const stage = run?.kind === 'gate' ? run.stages.find(s => s.name === TEST_STAGE) : undefined
+  if (!run || !stage || stage.startedAt === null) return
+  const prev = await read($, tests)
+  if (prev.runId === run.id && prev.isFinal) return
+  const config = await kintsugiConfig($)
+  const tally = await readTally($, config, run.id)
+  // The usual total: the last passed run's count, read once per such run.
+  const base = testsBaseline(snap.runs, run)
+  let total = base && prev.baseId === base.id ? prev.total : null
+  if (base && total === null) {
+    const t = await readTally($, config, base.id)
+    total = t && testCount(t)
+  }
+  const isFinal = stage.state !== 'running' && tally !== null
+  await update($, tests, () => ({ runId: run.id, tally, isFinal, baseId: base && total !== null ? base.id : '', total }))
+}
+
+let isCounting = false
+
+async function refreshTests($: EngineInterface): Promise<void> {
+  if (isCounting) return
+  isCounting = true
+  try {
+    await refreshTestsOnce($)
+  } finally {
+    isCounting = false
+  }
+}
+
 // True from the moment this session opens the pane until ui.panes says it is gone: a session
 // that never opened it asks nothing (the mod loads in every session).
 let mayBeOpen = false
@@ -87,8 +156,9 @@ async function togglePane($: EngineInterface): Promise<boolean> {
   }
   mayBeOpen = true
   await $.ui.open({ id: PANE, title: PANE_TITLE })
-  // Awaited, so the pane's first draw has data.
+  // Awaited, so the pane's first draw has data, the test count included (a read or two of ~12 ms).
   await refresh($).catch(() => undefined)
+  await refreshTests($).catch(() => undefined)
   return true
 }
 
@@ -102,6 +172,11 @@ export const register: Register = (on, options) => {
     $.clock.every(POLL_MS, () => {
       void (async () => {
         if (await isPaneOpen($)) await refresh($)
+      })().catch(() => undefined)
+    })
+    $.clock.every(TESTS_MS, () => {
+      void (async () => {
+        if (await isPaneOpen($)) await refreshTests($)
       })().catch(() => undefined)
     })
     $.clock.every(FRAME_MS, () => {
@@ -126,6 +201,7 @@ export const register: Register = (on, options) => {
       {
         snap: await read($, snapshot),
         frame: await read($, frame),
+        tests: await read($, tests),
         now: await $.clock.now(),
         cols: e.props.bodyColumns || 80,
         surface: e.surface,

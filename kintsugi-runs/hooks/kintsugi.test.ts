@@ -2,17 +2,20 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Run, Stage } from '../types'
 import type { Segment } from './kintsugi'
-import { FAILED_TICKET, HANSA_GATE, KINTSUGI_ID, NOW, PASSED_GATE, PROJECTS, QUEUED_GATE, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
+import { FAILED_TICKET, HANSA_GATE, KINTSUGI_ID, NOW, PASSED_GATE, PASSED_TEST_LOG, PROJECTS, QUEUED_GATE, RUNNING_GATE, RUNNING_TEST_LOG, UNAVAILABLE, overview } from './fixtures'
 import {
   SPINNER,
   bar,
   columns,
   configPath,
+  countTests,
   currentRun,
   fmtAgo,
+  fmtCount,
   fmtDuration,
   glyph,
   isMoving,
+  logsArgv,
   mainRoot,
   matchProject,
   overviewArgv,
@@ -23,6 +26,8 @@ import {
   stageDuration,
   stateColor,
   stateWord,
+  testsBaseline,
+  testsHead,
   timeline,
   timingHead,
   timingTrack,
@@ -270,5 +275,57 @@ describe('timing while a long stage runs (finished stages to scale | the running
     const fin = { ...MOCK, state: 'succeeded', stages: [...MOCK.stages.slice(0, 3), st('test', 'succeeded', 35_000, 75 * 60_000), st('skip-gate', 'succeeded', 75 * 60_000, 75 * 60_000 + 1000)] }
     expect(timeline(fin, 99 * 60_000, 42, USUAL, 0)).toEqual([[g(0), f(1)], [g(0), f(1)], [g(0), f(1)], [g(0), f(42)], [g(41), f(1)]])
     expect(timingHead(fin, 99 * 60_000, USUAL)).toBe('1h15m')
+  })
+})
+
+describe('counting tests in a stage log', () => {
+  test("cargo's and unittest's per-test lines: passed, failed by name, ignored; notices, failure blocks and summaries are not tests", () => {
+    expect(countTests(RUNNING_TEST_LOG)).toEqual({ passed: 3, failed: 1, ignored: 1, failedNames: ['inbox::production_review_tests::i261_socket_local_settings_end_the_review'] })
+    expect(countTests(PASSED_TEST_LOG)).toEqual({ passed: 5, failed: 0, ignored: 1, failedNames: [] })
+  })
+
+  test("unittest's FAIL and ERROR are failures, skipped is ignored", () => {
+    const log = ['test_a (__main__.T.test_a) ... FAIL', 'test_b (__main__.T.test_b) ... ERROR', "test_c (__main__.T.test_c) ... skipped 'slow'", 'test_d (__main__.T.test_d) ... ok'].join('\n')
+    expect(countTests(log)).toEqual({ passed: 1, failed: 2, ignored: 1, failedNames: ['test_a (__main__.T.test_a)', 'test_b (__main__.T.test_b)'] })
+  })
+
+  test('a log with no per-test lines is no count at all', () => {
+    expect(countTests('')).toBeNull()
+    expect(countTests('RUN LOGS operation=x stage=test\nAvailability: available bytes=0\n')).toBeNull()
+  })
+
+  test('the log of one stage of one operator run, read with the documented config', () => {
+    expect(logsArgv('/c.toml', 'op-1')).toEqual(['kintsugi', '--config', '/c.toml', 'run', 'logs', '--operation-id', 'op-1', '--stage', 'test'])
+  })
+
+  test('the expected total comes from the newest passed run like this one', () => {
+    const running = byId(RUNNING_GATE.operation_id) as Run
+    expect(testsBaseline(ALL, running)?.id).toBe(PASSED_GATE.operation_id)
+    const newer = runsOf([], [RUNNING_GATE, PASSED_GATE, { ...PASSED_GATE, operation_id: 'op-newer', created_at_ms: PASSED_GATE.created_at_ms + 1000 }])
+    expect(testsBaseline(newer, running)?.id).toBe('op-newer')
+    // Another profile, another project, a failed test stage: none of them is like this run.
+    const unlike = runsOf(
+      [],
+      [
+        RUNNING_GATE,
+        { ...PASSED_GATE, operation_id: 'op-quick', profile: 'quick' },
+        { ...PASSED_GATE, operation_id: 'op-elsewhere', project_id: 'elsewhere' },
+        { ...PASSED_GATE, operation_id: 'op-red', stages: PASSED_GATE.stages.map(st => (st.name === 'test' ? { ...st, state: 'failed' } : st)) },
+      ],
+    )
+    expect(testsBaseline(unlike, running)).toBeNull()
+    // A run is never its own baseline.
+    const passed = byId(PASSED_GATE.operation_id) as Run
+    expect(testsBaseline([passed], passed)).toBeNull()
+  })
+
+  test('counts with thousands separators; the heading puts the run so far against the usual total while the stage runs', () => {
+    expect(fmtCount(999)).toBe('999')
+    expect(fmtCount(2609)).toBe('2,609')
+    expect(fmtCount(1234567)).toBe('1,234,567')
+    const t = { passed: 2596, failed: 1, ignored: 12, failedNames: [] }
+    expect(testsHead(t, 3560, true)).toBe('2,609 of ~3,560 run')
+    expect(testsHead(t, null, true)).toBe('2,609 run')
+    expect(testsHead(t, 3560, false)).toBe('2,609 run')
   })
 })

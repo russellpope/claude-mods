@@ -1,8 +1,28 @@
-import type { Run, Snapshot, Stage } from '../types'
-import { columns, currentRun, fmtAgo, fmtDuration, glyph, queuedBehind, stageDuration, stateColor, stateWord, timeline, timingHead, timingTrack, usualDurations } from './kintsugi'
+import type { Run, Snapshot, Stage, TestsView } from '../types'
+import {
+  TEST_STAGE,
+  columns,
+  currentRun,
+  fmtAgo,
+  fmtCount,
+  fmtDuration,
+  glyph,
+  queuedBehind,
+  stageDuration,
+  stateColor,
+  stateWord,
+  testsHead,
+  timeline,
+  timingHead,
+  timingTrack,
+  usualDurations,
+} from './kintsugi'
 import type { Segment } from './kintsugi'
 
-export type PaneModel = { snap: Snapshot; frame: number; now: number; cols: number; surface: string }
+export type PaneModel = { snap: Snapshot; frame: number; now: number; cols: number; surface: string; tests: TestsView }
+
+/** Failed tests named under the tally; the rest are counted. */
+const MAX_FAILED_NAMES = 3
 
 // `ui` is `$.ui.resolve(e)` for a Pane render; typed loosely so the terminal and desktop tables both fit.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -93,6 +113,53 @@ export function drawPane(ui: UI, m: PaneModel) {
     )
   }
 
+  // The test stage's log, counted: the tests run so far against the last passed run's total,
+  // the tally in a wrapping row, and the first failures by name.
+  const testsSection = (run: Run) => {
+    const t = m.tests.runId === run.id ? m.tests.tally : null
+    if (!t) return null
+    const isRunning = run.stages.some(s => s.name === TEST_STAGE && s.state === 'running')
+    const more = t.failedNames.length - MAX_FAILED_NAMES
+    const item = (key: string, label: string, style: object, isLast = false) => (
+      <Box key={key}>
+        <Text {...style}>{label}</Text>
+        {isLast ? null : <Text dimColor>{' ·'}</Text>}
+      </Box>
+    )
+    return (
+      <Box key="tests" flexDirection="column">
+        {/* Too narrow for both: the count goes under the label rather than squeezing it. */}
+        <Box key="tests-head" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+          <Box key="tests-label" flexShrink={0}>
+            <Text bold>Tests</Text>
+          </Box>
+          <Text dimColor wrap="truncate-end">
+            {testsHead(t, m.tests.total, isRunning)}
+          </Text>
+        </Box>
+        <Box key="tally" flexDirection="row" flexWrap="wrap" columnGap={1}>
+          {item('tally-passed', `✓ ${fmtCount(t.passed)} passed`, { color: 'success' })}
+          {item('tally-failed', `✗ ${fmtCount(t.failed)} failed`, t.failed ? { color: 'error' } : { dimColor: true })}
+          {item('tally-ignored', `${fmtCount(t.ignored)} ignored`, { dimColor: true }, true)}
+        </Box>
+        {/* A long name gives way from its left, so the test's own name at its end stays. */}
+        {t.failedNames.slice(0, MAX_FAILED_NAMES).map((name, i) => (
+          <Box key={`failed-${i}`} flexDirection="row" gap={1} paddingLeft={2}>
+            <Text color="error">✗</Text>
+            <Text color="error" wrap="truncate-start">
+              {name}
+            </Text>
+          </Box>
+        ))}
+        {more > 0 ? (
+          <Box key="failed-more" paddingLeft={2}>
+            <Text dimColor>{`+${more} more`}</Text>
+          </Box>
+        ) : null}
+      </Box>
+    )
+  }
+
   // The console's TIMING block across the panel width. While a long stage runs, the finished
   // stages share the left half to scale and the running one fills the right half against its
   // usual length; see timeline().
@@ -175,6 +242,7 @@ export function drawPane(ui: UI, m: PaneModel) {
         empty
       )}
       {current ? jobs(current) : null}
+      {current ? testsSection(current) : null}
       {current ? timing(current) : null}
       {footer}
     </Box>
