@@ -1,0 +1,19 @@
+{
+  "name": "kintsugi-runs",
+  "version": "0.1.0",
+  "description": "Pane of this repo's kintsugi verification runs: the stage pipeline, each stage's exit and time, and a timing bar. /kintsugi-runs toggles it.",
+  "author": { "name": "Russell Pope", "url": "https://github.com/russellpope" },
+  "homepage": "https://github.com/russellpope/claude-mods/tree/main/kintsugi-runs",
+  "repository": "https://github.com/russellpope/claude-mods",
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "motion": {
+      "type": "string",
+      "title": "Spinner",
+      "description": "off keeps the running spinner still",
+      "default": "on",
+      "options": ["on", "off"]
+    }
+  }
+}
