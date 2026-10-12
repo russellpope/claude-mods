@@ -75,10 +75,22 @@ export function matchProject(projects: EnrolledProject[], root: string): Project
 const ACTIVE = new Set(['pending', 'running', 'quota_paused', 'uncertain'])
 export const isActive = (state: string): boolean => ACTIVE.has(state)
 
-/** The run the tab shows: the newest active one, else the newest, so the last result stays in view. */
+const newestFirst = (runs: Run[], projectId: string | null): Run[] =>
+  (projectId ? runs.filter(r => r.projectId === projectId) : runs).slice().sort((a, b) => b.createdAt - a.createdAt)
+
+/**
+ * The run the tab shows: the newest one under way, else the newest queued one, else the newest,
+ * so the last result stays in view. A run queued behind another never hides it.
+ */
 export function currentRun(runs: Run[], projectId: string | null): Run | null {
-  const scope = (projectId ? runs.filter(r => r.projectId === projectId) : runs).slice().sort((a, b) => b.createdAt - a.createdAt)
-  return scope.find(r => isActive(r.state)) ?? scope[0] ?? null
+  const scope = newestFirst(runs, projectId)
+  return scope.find(r => isActive(r.state) && r.state !== 'pending') ?? scope.find(r => r.state === 'pending') ?? scope[0] ?? null
+}
+
+/** How many runs wait queued behind the one shown; 0 when it is queued itself. */
+export function queuedBehind(runs: Run[], projectId: string | null, shown: Run | null): number {
+  if (!shown || shown.state === 'pending') return 0
+  return newestFirst(runs, projectId).filter(r => r.state === 'pending' && r.id !== shown.id).length
 }
 
 export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'

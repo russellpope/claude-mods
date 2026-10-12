@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
 import type { Snapshot } from '../types'
-import { FAILED_TICKET, HANSA_GATE, NOW, PASSED_GATE, PROJECTS, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
+import { FAILED_TICKET, HANSA_GATE, NOW, PASSED_GATE, PROJECTS, QUEUED_GATE, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
 
 type On = Parameters<TestBody>[1]
 type E = Parameters<TestBody>[0]
@@ -180,6 +180,19 @@ describe('pane', () => {
     // Not started: a name and no bar.
     expect(await ui.find({ type: 'Box', key: 'bar-skip-gate' })).toBeUndefined()
     expect(await ui.find({ type: 'Box', key: 'tl-skip-gate' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a run queued behind the running one: the running run shows, the queue counted under its header', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    host(on, { overview: () => overview([], [QUEUED_GATE, RUNNING_GATE, PASSED_GATE]) })
+    await setup(on).open($)
+    const ui = await mount($)
+    expect(await ui.find({ type: 'Text', text: /^verify full · main · eb598c9$/ })).toBeDefined()
+    // Two pieces in a wrapping row, so a narrow pane breaks between them, not mid-phrase.
+    expect((await ui.find({ type: 'Box', key: 'since' }))?.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 })
+    expect((await ui.find({ type: 'Box', key: 'since-age' }))?.text).toBe('started 1h ago ·')
+    expect((await ui.find({ type: 'Box', key: 'since-queue' }))?.text).toBe('1 queued behind it')
     await ui.unmount()
   })
 

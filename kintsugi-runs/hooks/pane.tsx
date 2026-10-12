@@ -1,5 +1,5 @@
 import type { Run, Snapshot, Stage } from '../types'
-import { columns, currentRun, fmtAgo, fmtDuration, glyph, stageDuration, stateColor, stateWord, timeline, timingHead, timingTrack, usualDurations } from './kintsugi'
+import { columns, currentRun, fmtAgo, fmtDuration, glyph, queuedBehind, stageDuration, stateColor, stateWord, timeline, timingHead, timingTrack, usualDurations } from './kintsugi'
 import type { Segment } from './kintsugi'
 
 export type PaneModel = { snap: Snapshot; frame: number; now: number; cols: number; surface: string }
@@ -19,6 +19,7 @@ export function drawPane(ui: UI, m: PaneModel) {
   }
   const isAll = snap.isResolved && !snap.project
   const current = currentRun(snap.runs, snap.project?.id ?? null)
+  const queued = queuedBehind(snap.runs, snap.project?.id ?? null, current)
 
   // The project is named only when the tab covers every project; the state keeps its width
   // so a narrow dock truncates the title instead of wrapping the state under it.
@@ -32,7 +33,17 @@ export function drawPane(ui: UI, m: PaneModel) {
           <Text {...paint(run.state)}>{`${glyph(run.state, frame)} ${stateWord(run.state)}`}</Text>
         </Box>
       </Box>
-      <Text dimColor>{`started ${fmtAgo(now - run.createdAt)}`}</Text>
+      {/* A wrapping row, so a narrow dock puts the queue on its own line instead of splitting it. */}
+      <Box key="since" flexDirection="row" flexWrap="wrap" columnGap={1}>
+        <Box key="since-age">
+          <Text dimColor>{`started ${fmtAgo(now - run.createdAt)}${queued ? ' ·' : ''}`}</Text>
+        </Box>
+        {queued ? (
+          <Box key="since-queue">
+            <Text dimColor>{`${queued} queued behind it`}</Text>
+          </Box>
+        ) : null}
+      </Box>
     </Box>
   )
 

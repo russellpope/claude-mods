@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Run, Stage } from '../types'
 import type { Segment } from './kintsugi'
-import { FAILED_TICKET, HANSA_GATE, KINTSUGI_ID, NOW, PASSED_GATE, PROJECTS, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
+import { FAILED_TICKET, HANSA_GATE, KINTSUGI_ID, NOW, PASSED_GATE, PROJECTS, QUEUED_GATE, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
 import {
   SPINNER,
   bar,
@@ -18,6 +18,7 @@ import {
   overviewArgv,
   parseProjects,
   parseRuns,
+  queuedBehind,
   runDuration,
   stageDuration,
   stateColor,
@@ -107,6 +108,23 @@ describe('which run the tab shows', () => {
 
   test('no runs: none', () => {
     expect(currentRun([], KINTSUGI_ID)).toBeNull()
+  })
+
+  test('a run under way beats a newer one queued behind it, and the queue is counted', () => {
+    const runs = runsOf([], [QUEUED_GATE, RUNNING_GATE, PASSED_GATE])
+    const shown = currentRun(runs, KINTSUGI_ID)
+    expect(shown?.id).toBe(RUNNING_GATE.operation_id)
+    expect(queuedBehind(runs, KINTSUGI_ID, shown)).toBe(1)
+    // Another project's queue is not this repo's.
+    expect(queuedBehind(runsOf([], [{ ...QUEUED_GATE, project_id: 'elsewhere' }, RUNNING_GATE]), KINTSUGI_ID, shown)).toBe(0)
+  })
+
+  test('only queued: the newest queued run, and no queue line under it', () => {
+    // The older queued run is ahead of the shown one, not behind it.
+    const runs = runsOf([], [QUEUED_GATE, { ...QUEUED_GATE, operation_id: 'op-older-queued', created_at_ms: QUEUED_GATE.created_at_ms - 60_000 }, PASSED_GATE])
+    const shown = currentRun(runs, KINTSUGI_ID)
+    expect(shown?.id).toBe(QUEUED_GATE.operation_id)
+    expect(queuedBehind(runs, KINTSUGI_ID, shown)).toBe(0)
   })
 })
 
