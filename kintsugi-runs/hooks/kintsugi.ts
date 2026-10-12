@@ -207,15 +207,23 @@ const INDENT = 2
 const STATE_W = 11 // a glyph, a space and 'uncertain'
 const EXIT_W = 4
 const TIME_W = 6 // '11m23s'
+const GLYPH_W = 1
+const MIN_STAGE = 3
 const MIN_TIMING = 8
 
 const stageWidth = (stages: Stage[]): number => Math.max(5, ...stages.map(s => s.name.length))
 
-/** Column widths for the jobs table; exit is 0, dropped, when the row would not fit. */
+/**
+ * Column widths for the jobs table. As the pane narrows, the exit column goes (exit 0), then
+ * the state word (state 1: the glyph alone), then stage names shorten; the time always stays.
+ */
 export function columns(cols: number, stages: Stage[]): { state: number; stage: number; exit: number; time: number } {
   const stage = stageWidth(stages)
-  const fixed = INDENT + STATE_W + 1 + stage + 1 + EXIT_W + 1 + TIME_W
-  return { state: STATE_W, stage, exit: fixed > cols ? 0 : EXIT_W, time: TIME_W }
+  const row = (state: number, stage: number, exit: number) => INDENT + state + 1 + stage + 1 + (exit ? exit + 1 : 0) + TIME_W
+  if (row(STATE_W, stage, EXIT_W) <= cols) return { state: STATE_W, stage, exit: EXIT_W, time: TIME_W }
+  if (row(STATE_W, stage, 0) <= cols) return { state: STATE_W, stage, exit: 0, time: TIME_W }
+  const room = cols - row(GLYPH_W, 0, 0)
+  return { state: GLYPH_W, stage: Math.max(MIN_STAGE, Math.min(stage, room)), exit: 0, time: TIME_W }
 }
 
 /** The timing track: the panel width beside the stage names, the whole run spread across it; 0 when too narrow. */

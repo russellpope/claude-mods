@@ -194,7 +194,7 @@ describe('pane', () => {
     await ui.unmount()
   })
 
-  test('a narrow pane drops exit codes, then the timing section', async ($, on) => {
+  test('a narrow pane drops exit codes, then state words, then the timing section', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})
     await setup(on).open($)
@@ -203,8 +203,13 @@ describe('pane', () => {
     expect(await mid.find({ type: 'Box', key: 'bar-test' })).toBeDefined()
     await mid.unmount()
     const narrow = await mount($, 34)
-    expect((await narrow.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/check\s*38s/)
+    expect((await narrow.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/passed\s*check\s*38s/)
     await narrow.unmount()
+    // Too narrow for the state word: its coloured glyph stays, and so does the time.
+    const slim = await mount($, 24)
+    expect((await slim.find({ type: 'Box', key: 'job-test' }))?.text).toMatch(/^⠋\s*test\s*1h01m$/)
+    expect((await slim.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/^✓\s*check\s*38s$/)
+    await slim.unmount()
     const tiny = await mount($, 17)
     expect(await tiny.find({ type: 'Text', text: /^Timing$/ })).toBeUndefined()
     await tiny.unmount()

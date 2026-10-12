@@ -169,11 +169,16 @@ describe('drawing words', () => {
     expect(isMoving(null)).toBe(false)
   })
 
-  test('narrow panes drop the exit column; nothing wraps', () => {
+  test('narrow panes drop the exit column, then the state word, then shorten stage names; the time stays', () => {
     const stages = (byId(RUNNING_GATE.operation_id) as Run).stages
     expect(columns(100, stages)).toEqual({ state: 11, stage: 9, exit: 4, time: 6 })
     expect(columns(35, stages)).toEqual({ state: 11, stage: 9, exit: 4, time: 6 })
     expect(columns(34, stages)).toEqual({ state: 11, stage: 9, exit: 0, time: 6 })
+    expect(columns(30, stages)).toEqual({ state: 11, stage: 9, exit: 0, time: 6 })
+    // 2 indent + glyph + 9 + 6 and the gaps: 20.
+    expect(columns(29, stages)).toEqual({ state: 1, stage: 9, exit: 0, time: 6 })
+    expect(columns(20, stages)).toEqual({ state: 1, stage: 9, exit: 0, time: 6 })
+    expect(columns(16, stages)).toEqual({ state: 1, stage: 5, exit: 0, time: 6 })
   })
 
   test('the timing track takes the panel width beside the stage names; too narrow, none', () => {

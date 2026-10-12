@@ -58,7 +58,8 @@ export function drawPane(ui: UI, m: PaneModel) {
       return (
         <Box key={`job-${s.name}`} flexDirection="row" gap={1} paddingLeft={2}>
           <Box {...fixed(c.state)}>
-            <Text {...paint(s.state)}>{`${glyph(s.state, frame)} ${stateWord(s.state)}`}</Text>
+            {/* A one-cell state column holds the coloured glyph alone. */}
+            <Text {...paint(s.state)}>{c.state > 1 ? `${glyph(s.state, frame)} ${stateWord(s.state)}` : glyph(s.state, frame)}</Text>
           </Box>
           <Box {...fixed(c.stage)}>
             <Text wrap="truncate-end">{s.name}</Text>
