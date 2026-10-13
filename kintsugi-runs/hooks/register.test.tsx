@@ -204,6 +204,35 @@ describe('pane', () => {
     await ui.unmount()
   })
 
+  test('a run that waited 26 minutes in the queue: timed from its first stage, the wait named under its header', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    const waited = { ...RUNNING_GATE, created_at_ms: RUNNING_GATE.created_at_ms - 26 * 60_000 }
+    host(on, { overview: () => overview([], [QUEUED_GATE, waited, PASSED_GATE]) })
+    await setup(on).open($)
+    const ui = await mount($, 100)
+    expect((await ui.find({ type: 'Box', key: 'since-age' }))?.text).toBe('started 1h ago ·')
+    expect((await ui.find({ type: 'Box', key: 'since-wait' }))?.text).toBe('waited 26m00s ·')
+    expect((await ui.find({ type: 'Box', key: 'since-queue' }))?.text).toBe('1 queued behind it')
+    // The bars sit as for the run that started at once (the timing test above), not bunched
+    // at the left half's end behind 26 minutes of nothing.
+    expect((await ui.find({ type: 'Box', key: 'bar-fmt' }))?.text).toBe('━━')
+    expect((await ui.find({ type: 'Box', key: 'bar-lint' }))?.text).toMatch(/^ {30}━{14}$/)
+    await ui.unmount()
+  })
+
+  test('a run still in the queue: when it was queued, and no timing until a stage starts', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    host(on, { overview: () => overview([], [QUEUED_GATE]) })
+    await setup(on).open($)
+    const ui = await mount($, 100)
+    expect(await ui.find({ type: 'Text', text: /^verify full · main · f39b294$/ })).toBeDefined()
+    expect((await ui.find({ type: 'Box', key: 'since-age' }))?.text).toBe('queued 1m ago')
+    // Its heading would only time the wait, over no bars.
+    expect(await ui.find({ type: 'Text', text: /^Timing$/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Box', key: 'timing' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('only the active run: no recent list, nothing to pin', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})

@@ -23,6 +23,7 @@ import {
   parseRuns,
   queuedBehind,
   runDuration,
+  sinceLine,
   stageDuration,
   stateColor,
   stateWord,
@@ -169,9 +170,9 @@ describe('drawing words', () => {
     expect(stageDuration(gate.stages[4] as Stage, NOW)).toBeNull()
   })
 
-  test('a run lasts from its start to its last stage, or to now while active', () => {
-    expect(runDuration(byId(PASSED_GATE.operation_id) as Run, NOW)).toBe(1791599099998 - 1791593687860)
-    expect(runDuration(byId(RUNNING_GATE.operation_id) as Run, NOW)).toBe(NOW - 1791605020295)
+  test('a run lasts from its first stage to its last, or to now while active', () => {
+    expect(runDuration(byId(PASSED_GATE.operation_id) as Run, NOW)).toBe(1791599099998 - 1791593688254)
+    expect(runDuration(byId(RUNNING_GATE.operation_id) as Run, NOW)).toBe(NOW - 1791605021291)
   })
 
   test('timing bars sit where each stage ran within the run', () => {
@@ -224,6 +225,38 @@ const g = (n: number): Segment => ({ kind: 'gap', n })
 const f = (n: number): Segment => ({ kind: 'fill', n })
 const o = (n: number): Segment => ({ kind: 'ghost', n })
 
+describe('the line under the header', () => {
+  // The running gate's fmt started 996 ms after the run was created.
+  const running = () => byId(RUNNING_GATE.operation_id) as Run
+  const queuedFor = (ms: number): Run => ({ ...running(), createdAt: running().createdAt - ms })
+
+  test('a run that started at once: when it started', () => {
+    expect(sinceLine(running(), NOW, 0)).toEqual([{ key: 'since-age', text: 'started 1h ago' }])
+  })
+
+  test('a run that waited in the queue: when its first stage started, then how long it waited', () => {
+    expect(sinceLine(queuedFor(26 * 60_000), NOW, 1)).toEqual([
+      { key: 'since-age', text: 'started 1h ago' },
+      { key: 'since-wait', text: 'waited 26m00s' },
+      { key: 'since-queue', text: '1 queued behind it' },
+    ])
+    // Two minutes after fmt started, 28 after the run was queued.
+    expect(sinceLine(queuedFor(26 * 60_000), 1791605021291 + 2 * 60_000, 0).map(p => p.text)).toEqual(['started 2m ago', 'waited 26m00s'])
+  })
+
+  test('a wait under a minute goes unmentioned', () => {
+    // 59_003 + 996 ms: a millisecond short of a minute; one more and it is mentioned.
+    expect(sinceLine(queuedFor(59_003), NOW, 0).map(p => p.key)).toEqual(['since-age'])
+    expect(sinceLine(queuedFor(59_004), NOW, 0)[1]).toEqual({ key: 'since-wait', text: 'waited 1m00s' })
+  })
+
+  test('a run still in the queue, or cancelled there: when it was queued', () => {
+    const queued = runsOf([], [QUEUED_GATE])[0] as Run
+    expect(sinceLine(queued, NOW, 0)).toEqual([{ key: 'since-age', text: 'queued 1m ago' }])
+    expect(sinceLine({ ...queued, state: 'cancelled' }, NOW, 0)).toEqual([{ key: 'since-age', text: 'queued 1m ago' }])
+  })
+})
+
 describe('usual stage lengths', () => {
   test("medians from this repo's passed runs of the same kind; the run itself, failures and other projects left out", () => {
     const passed = byId(PASSED_GATE.operation_id) as Run
@@ -269,6 +302,21 @@ describe('timing while a long stage runs (finished stages to scale | the running
     expect(rows[3]).toEqual([g(0), f(42)])
     expect(rows[4]).toEqual([g(41), f(1)])
     expect(timingHead(last, now, USUAL)).toBe('1h15m')
+  })
+
+  test('time in the queue before the first stage is left out: the bars sit as for a run that started at once', () => {
+    // Created at T, then 26 minutes queued behind another run before fmt started.
+    const T = 1_000_000_000
+    const wait = 26 * 60_000
+    const later = (run: Run): Run => ({
+      ...run,
+      createdAt: T,
+      stages: run.stages.map(s => ({ ...s, startedAt: s.startedAt === null ? null : s.startedAt + T + wait, finishedAt: s.finishedAt === null ? null : s.finishedAt + T + wait })),
+    })
+    expect(timeline(later(MOCK), T + wait + 600_000, 42, USUAL, 0)).toEqual([[g(0), f(1)], [g(1), f(10)], [g(11), f(10)], [g(21), f(3), o(18)], []])
+    const fin = { ...MOCK, state: 'succeeded', stages: [...MOCK.stages.slice(0, 3), st('test', 'succeeded', 35_000, 75 * 60_000), st('skip-gate', 'succeeded', 75 * 60_000, 75 * 60_000 + 1000)] }
+    expect(timeline(later(fin), T + wait + 99 * 60_000, 42, USUAL, 0)).toEqual([[g(0), f(1)], [g(0), f(1)], [g(0), f(1)], [g(0), f(42)], [g(41), f(1)]])
+    expect(timingHead(later(fin), T + wait + 99 * 60_000, USUAL)).toBe('1h15m')
   })
 
   test('a finished run: true scale across the whole track', () => {

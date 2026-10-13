@@ -3,11 +3,13 @@ import {
   TEST_STAGE,
   columns,
   currentRun,
+  firstStageAt,
   fmtAgo,
   fmtCount,
   fmtDuration,
   glyph,
   queuedBehind,
+  sinceLine,
   stageDuration,
   stateColor,
   stateWord,
@@ -43,7 +45,7 @@ export function drawPane(ui: UI, m: PaneModel) {
 
   // The project is named only when the tab covers every project; the state keeps its width
   // so a narrow dock truncates the title instead of wrapping the state under it.
-  const header = (run: Run) => (
+  const header = (run: Run, since = sinceLine(run, now, queued)) => (
     <Box key="head" flexDirection="column">
       <Box flexDirection="row" justifyContent="space-between" gap={2}>
         <Text bold wrap="truncate-end">
@@ -53,16 +55,14 @@ export function drawPane(ui: UI, m: PaneModel) {
           <Text {...paint(run.state)}>{`${glyph(run.state, frame)} ${stateWord(run.state)}`}</Text>
         </Box>
       </Box>
-      {/* A wrapping row, so a narrow dock puts the queue on its own line instead of splitting it. */}
+      {/* A wrapping row of whole pieces, so a narrow dock breaks the line between them, never mid-phrase. */}
       <Box key="since" flexDirection="row" flexWrap="wrap" columnGap={1}>
-        <Box key="since-age">
-          <Text dimColor>{`started ${fmtAgo(now - run.createdAt)}${queued ? ' ·' : ''}`}</Text>
-        </Box>
-        {queued ? (
-          <Box key="since-queue">
-            <Text dimColor>{`${queued} queued behind it`}</Text>
+        {since.map((p, i) => (
+          <Box key={p.key}>
+            <Text dimColor>{p.text}</Text>
+            {i < since.length - 1 ? <Text dimColor>{' ·'}</Text> : null}
           </Box>
-        ) : null}
+        ))}
       </Box>
     </Box>
   )
@@ -165,7 +165,8 @@ export function drawPane(ui: UI, m: PaneModel) {
   // usual length; see timeline().
   const timing = (run: Run) => {
     const track = timingTrack(m.cols, run.stages)
-    if (!track) return null
+    // Before a stage starts there are no bars, and the heading would only time the queue.
+    if (!track || firstStageAt(run) === null) return null
     const name = Math.max(5, ...run.stages.map(s => s.name.length))
     const usual = usualDurations(snap.runs, run)
     const rows = timeline(run, now, track, usual, frame)

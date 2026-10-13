@@ -170,10 +170,35 @@ export function fmtAgo(ms: number): string {
   return h < 48 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`
 }
 
+/** When the run's first stage started; null before any has. Its time in the queue ends here. */
+export function firstStageAt(run: Run): number | null {
+  const first = Math.min(...run.stages.map(s => s.startedAt ?? Infinity))
+  return first < Infinity ? first : null
+}
+
+/** A wait in the queue shorter than this goes unmentioned: a run queued behind none starts its first stage within seconds. */
+const WAIT_NOTE_MS = 60_000
+
+/**
+ * The pieces of the line under the header: when the run's first stage started, how long it
+ * waited in the queue before that, and the queue behind it. A run no stage of which has
+ * started (still queued, or cancelled there) says when it was queued.
+ */
+export function sinceLine(run: Run, now: number, queued: number): { key: string; text: string }[] {
+  const first = firstStageAt(run)
+  const wait = first === null ? 0 : first - run.createdAt
+  return [
+    { key: 'since-age', text: first === null ? `queued ${fmtAgo(now - run.createdAt)}` : `started ${fmtAgo(now - first)}` },
+    ...(wait >= WAIT_NOTE_MS ? [{ key: 'since-wait', text: `waited ${fmtDuration(wait)}` }] : []),
+    ...(queued ? [{ key: 'since-queue', text: `${queued} queued behind it` }] : []),
+  ]
+}
+
 /** How long a stage ran, or has been running; null before it starts. */
 export const stageDuration = (s: Stage, now: number): number | null => (s.startedAt === null ? null : (s.finishedAt ?? now) - s.startedAt)
 
-const runStart = (run: Run): number => Math.min(run.createdAt || Infinity, ...run.stages.map(s => s.startedAt ?? Infinity))
+// From the first stage: time queued behind another run would push every bar to the right.
+const runStart = (run: Run): number => firstStageAt(run) ?? run.createdAt
 const runEnd = (run: Run, now: number): number => (isActive(run.state) ? now : Math.max(0, ...run.stages.map(s => s.finishedAt ?? 0)) || run.updatedAt)
 
 export const runDuration = (run: Run, now: number): number => runEnd(run, now) - runStart(run)
