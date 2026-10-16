@@ -1,4 +1,4 @@
-import type { Project, Run, Stage } from '../types'
+import type { Project, Run, Stage, TestTally } from '../types'
 
 // kintsugi refuses a call without --state or --config, so the mod names the config the way
 // kintsugi's own help does: KINTSUGI_CONFIG, else ~/.config/kintsugi/config.toml.
@@ -6,6 +6,11 @@ export const configPath = (env: string | undefined, home: string): string => env
 export const overviewArgv = (config: string): string[] => ['kintsugi', '--config', config, '--json', 'run', 'overview']
 export const projectsArgv = (config: string): string[] => ['kintsugi', '--config', config, '--json', 'project', 'list']
 export const commonDirArgv = (cwd: string): string[] => ['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir']
+
+/** The stage whose log the Tests section counts. */
+export const TEST_STAGE = 'test'
+// `run logs` prints one operator run's stage log as text; it has no --json.
+export const logsArgv = (config: string, id: string): string[] => ['kintsugi', '--config', config, 'run', 'logs', '--operation-id', id, '--stage', TEST_STAGE]
 
 /** kintsugi's JSON answer: `{ outcome: 'ok', result: { value } }`, or `{ outcome: 'error', error: { message } }`. */
 export function unwrap(stdout: string): { value: unknown } | { error: string } {
@@ -75,6 +80,49 @@ export function matchProject(projects: EnrolledProject[], root: string): Project
 const ACTIVE = new Set(['pending', 'running', 'quota_paused', 'uncertain'])
 export const isActive = (state: string): boolean => ACTIVE.has(state)
 
+// One per-test result line: cargo test's `test <name> ... ok|FAILED|ignored[, <reason>]`, and
+// unittest's `<name> (<class>) ... ok|FAIL|ERROR|skipped '<reason>'`. Notices ("has been running
+// for over 60 seconds"), failure blocks and `test result:` summaries never have the ` ... ` form.
+const RESULT_LINE = /^(.+?) \.\.\. (ok|FAILED|FAIL|ERROR|ignored|skipped)\b/gm
+const FAILED_WORDS = new Set(['FAILED', 'FAIL', 'ERROR'])
+
+/** The per-test results in a stage log; null when it holds none. */
+export function countTests(log: string): TestTally | null {
+  const t: TestTally = { passed: 0, failed: 0, ignored: 0, failedNames: [] }
+  for (const [, name = '', word = ''] of log.matchAll(RESULT_LINE)) {
+    if (word === 'ok') t.passed++
+    else if (FAILED_WORDS.has(word)) {
+      t.failed++
+      t.failedNames.push(name.replace(/^test /, ''))
+    } else t.ignored++
+  }
+  return testCount(t) ? t : null
+}
+
+export const testCount = (t: TestTally): number => t.passed + t.failed + t.ignored
+
+/** Where a run's expected test total comes from: the newest passed run like it whose test stage passed. */
+export function testsBaseline(runs: Run[], run: Run): Run | null {
+  const like = runs.filter(
+    r =>
+      r.id !== run.id &&
+      r.kind === run.kind &&
+      r.projectId === run.projectId &&
+      r.title === run.title &&
+      r.state === 'succeeded' &&
+      r.stages.some(s => s.name === TEST_STAGE && s.state === 'succeeded'),
+  )
+  return like.sort((a, b) => b.createdAt - a.createdAt)[0] ?? null
+}
+
+export const fmtCount = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+
+/** The Tests heading: the tests run so far, against the usual total while the stage runs. */
+export function testsHead(t: TestTally, total: number | null, isRunning: boolean): string {
+  const n = fmtCount(testCount(t))
+  return isRunning && total !== null ? `${n} of ~${fmtCount(total)} run` : `${n} run`
+}
+
 const newestFirst = (runs: Run[], projectId: string | null): Run[] =>
   (projectId ? runs.filter(r => r.projectId === projectId) : runs).slice().sort((a, b) => b.createdAt - a.createdAt)
 
@@ -122,10 +170,35 @@ export function fmtAgo(ms: number): string {
   return h < 48 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`
 }
 
+/** When the run's first stage started; null before any has. Its time in the queue ends here. */
+export function firstStageAt(run: Run): number | null {
+  const first = Math.min(...run.stages.map(s => s.startedAt ?? Infinity))
+  return first < Infinity ? first : null
+}
+
+/** A wait in the queue shorter than this goes unmentioned: a run queued behind none starts its first stage within seconds. */
+const WAIT_NOTE_MS = 60_000
+
+/**
+ * The pieces of the line under the header: when the run's first stage started, how long it
+ * waited in the queue before that, and the queue behind it. A run no stage of which has
+ * started (still queued, or cancelled there) says when it was queued.
+ */
+export function sinceLine(run: Run, now: number, queued: number): { key: string; text: string }[] {
+  const first = firstStageAt(run)
+  const wait = first === null ? 0 : first - run.createdAt
+  return [
+    { key: 'since-age', text: first === null ? `queued ${fmtAgo(now - run.createdAt)}` : `started ${fmtAgo(now - first)}` },
+    ...(wait >= WAIT_NOTE_MS ? [{ key: 'since-wait', text: `waited ${fmtDuration(wait)}` }] : []),
+    ...(queued ? [{ key: 'since-queue', text: `${queued} queued behind it` }] : []),
+  ]
+}
+
 /** How long a stage ran, or has been running; null before it starts. */
 export const stageDuration = (s: Stage, now: number): number | null => (s.startedAt === null ? null : (s.finishedAt ?? now) - s.startedAt)
 
-const runStart = (run: Run): number => Math.min(run.createdAt || Infinity, ...run.stages.map(s => s.startedAt ?? Infinity))
+// From the first stage: time queued behind another run would push every bar to the right.
+const runStart = (run: Run): number => firstStageAt(run) ?? run.createdAt
 const runEnd = (run: Run, now: number): number => (isActive(run.state) ? now : Math.max(0, ...run.stages.map(s => s.finishedAt ?? 0)) || run.updatedAt)
 
 export const runDuration = (run: Run, now: number): number => runEnd(run, now) - runStart(run)
