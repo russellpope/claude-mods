@@ -81,9 +81,9 @@ function drawList(ui: UI, m: PaneModel) {
         <Text bold wrap="truncate-end">{`artifacts${m.history.project ? ` · ${m.history.project}` : ''}`}</Text>
         <Text dimColor>{m.query.trim() ? `${hits.length} of ${items.length}` : String(items.length)}</Text>
       </Box>
-      {m.history.error ? (
+      {m.history.error || m.history.postError ? (
         <Box key="error">
-          <Text color="error">{m.history.error}</Text>
+          <Text color="error">{[m.history.error, m.history.postError].filter(Boolean).join(' · ')}</Text>
         </Box>
       ) : null}
       {items.length && Input ? (
@@ -93,7 +93,7 @@ function drawList(ui: UI, m: PaneModel) {
         <Box key="rows" flexDirection="column">
           {hits.map(row)}
         </Box>
-      ) : m.history.error ? null : (
+      ) : m.history.error || m.history.postError ? null : (
         <Box key="empty">
           <Text dimColor>{`nothing posted yet${m.history.project ? ` for ${m.history.project}` : ''}`}</Text>
         </Box>

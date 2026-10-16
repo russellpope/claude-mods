@@ -13,7 +13,7 @@ const TITLE = 'artifacts'
 const POLL_MS = 5000
 const DEFAULT_EDITOR = 'zed'
 
-export const EMPTY_HISTORY: HistoryView = { dir: '', project: '', items: [], error: '' }
+export const EMPTY_HISTORY: HistoryView = { dir: '', project: '', items: [], error: '', postError: '' }
 export const history = atom({ plugin: 'artifacts', key: 'history' } as const, EMPTY_HISTORY)
 export const pane = atom({ plugin: 'artifacts', key: 'pane' } as const, { view: 'list' } as PaneView)
 export const query = atom({ plugin: 'artifacts', key: 'query' } as const, '')
@@ -40,10 +40,12 @@ export const editorArgv = (setting: unknown, path: string): string[] => {
 // True from the moment this session opens the pane until ui.panes says it is gone.
 let mayBeOpen = false
 
-async function isPaneOpen($: EngineInterface): Promise<boolean> {
+/** Whether the pane is drawn where the person sees it: placed, its tab shown. One waiting undrawn (an unasked open on a narrow terminal) is not. */
+async function isPaneShown($: EngineInterface): Promise<boolean> {
   if (!mayBeOpen) return false
-  mayBeOpen = (await $.ui.panes()).some(p => p.id === PANE)
-  return mayBeOpen
+  const p = (await $.ui.panes()).find(x => x.id === PANE)
+  mayBeOpen = Boolean(p)
+  return Boolean(p?.isPlaced && p.isShown)
 }
 
 // The width the last render reported; 0 before one has. Beside a docked pane it is the transcript's, not the terminal's.
@@ -64,9 +66,9 @@ export async function openPane($: EngineInterface, terminalColumns?: number) {
 export async function refresh($: EngineInterface): Promise<HistoryView> {
   try {
     const { dir, project } = await historyDir($)
-    const next: HistoryView = { dir, project, items: await readHistory($, dir), error: '' }
-    await update($, history, () => next)
-    return next
+    const items = await readHistory($, dir)
+    // A failed post's error stays until the next post: a read that works says nothing about the write.
+    return await update($, history, h => ({ dir, project, items, error: '', postError: h.postError }))
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     await update($, history, h => ({ ...h, error }))
@@ -116,10 +118,10 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: COMMAND, description: 'Show or hide the designs, plans and diagrams posted for this project' })
     // A resumed session may still have the pane open: the poll finds out.
     mayBeOpen = true
-    await isPaneOpen($).catch(() => false)
+    await isPaneShown($).catch(() => false)
     $.clock.every(POLL_MS, () => {
       void (async () => {
-        if (await isPaneOpen($)) await refresh($)
+        if (await isPaneShown($)) await refresh($)
       })().catch(() => undefined)
     })
     return started
@@ -127,7 +129,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: COMMAND }, async ($, e) => {
     mayBeOpen = true
-    if (await isPaneOpen($)) {
+    if (await isPaneShown($)) {
       await $.ui.close({ id: PANE })
       return { text: 'artifacts closed.' }
     }
@@ -143,6 +145,7 @@ export const register: Register = (on, options) => {
     try {
       const { dir, home } = await historyDir($)
       const meta = await post($, dir, args, await $.clock.now())
+      await update($, history, h => ({ ...h, postError: '' }))
       await update($, mine, ids => (ids.includes(meta.id) ? ids : [...ids, meta.id]))
       await refresh($)
       await openReader($, meta.id)
@@ -151,7 +154,7 @@ export const register: Register = (on, options) => {
       return { result: `posted ${meta.id} v${meta.version} · ${tilde(`${dir}/${meta.id}.md`, home)}` }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
-      if (!(err instanceof ShowError)) await update($, history, h => ({ ...h, error: reason }))
+      if (!(err instanceof ShowError)) await update($, history, h => ({ ...h, postError: reason }))
       return { deny: reason }
     }
   })

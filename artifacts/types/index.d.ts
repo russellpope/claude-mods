@@ -21,8 +21,10 @@ export type HistoryView = {
   /** The project's name for the header: the root's base name. */
   project: string
   items: ArtifactMeta[]
-  /** The last read's or post's failure, in words; empty when none. */
+  /** The last read's failure, in words; empty when none. */
   error: string
+  /** The last post's write failure, in words, kept until a post succeeds; empty when none. */
+  postError: string
 }
 
 /** Which view the pane shows. */

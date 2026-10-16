@@ -29,8 +29,10 @@ export async function readHistory($: EngineInterface, dir: string): Promise<Arti
       const path = `${dir}/${f.name}`
       const hit = cache.get(path)
       if (hit && hit.mtimeMs === f.mtimeMs) return hit.meta
-      const { meta } = parseFile(f.name.slice(0, -3), await $.fs.read(path), f.mtimeMs)
-      cache.set(path, { mtimeMs: f.mtimeMs, meta })
+      // One file that won't read is listed by its name, as one without a header is, and tried again next time.
+      const text = await $.fs.read(path).catch(() => null)
+      const { meta } = parseFile(f.name.slice(0, -3), text ?? '', f.mtimeMs)
+      if (text !== null) cache.set(path, { mtimeMs: f.mtimeMs, meta })
       return meta
     }),
   )

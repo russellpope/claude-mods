@@ -13,7 +13,7 @@ const NOW = new Date(2026, 9, 15, 14, 2, 11).getTime()
 type Files = Map<string, { text: string; mtimeMs: number }>
 
 /** An in-memory disk under the fs ops: write, read, exists, list (files and the folders they imply); counts the lists. */
-const disk = (on: On, files: Files, failWrites = false) => {
+const disk = (on: On, files: Files, failWrites = false, unreadable: ReadonlySet<string> = new Set()) => {
   const io = { lists: 0 }
   on('fs.write', async (_$, e) => {
     // An op hook refuses with { deny }; a hook that throws is skipped, and the write would go on beneath it.
@@ -22,6 +22,7 @@ const disk = (on: On, files: Files, failWrites = false) => {
     return { value: undefined }
   })
   on('fs.read', async (_$, e) => {
+    if (unreadable.has(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` }
     const f = files.get(e.path)
     if (!f) return { deny: `ENOENT: no such file, open '${e.path}'` }
     return { value: f.text }
@@ -42,7 +43,7 @@ const disk = (on: On, files: Files, failWrites = false) => {
 }
 
 /** A session in a worktree of kintsugi, on branch `artifacts`, at NOW; returns the toasts it shows, the commands it runs and the opens it asks. */
-const session = (on: On, opts: { home?: string | null; repo?: string | null; placed?: boolean; clock?: boolean } = {}) => {
+const session = (on: On, opts: { home?: string | null; repo?: string | null; placed?: boolean; waitsUndrawn?: boolean; clock?: boolean } = {}) => {
   mock.env(on, opts.home === null ? {} : { HOME: opts.home ?? HOME })
   // A test driving mock.clock passes clock: false, so this hook doesn't answer clock.now beneath it.
   if (opts.clock !== false) on('clock.now', async () => ({ value: NOW }))
@@ -55,17 +56,23 @@ const session = (on: On, opts: { home?: string | null; repo?: string | null; pla
     runs.push([...e.argv])
     return { value: { exitCode: 0, stdout: e.argv[0] === 'git' ? 'artifacts\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  let isOpen = false
+  // placed: false refuses every open; waitsUndrawn refuses only the first, as the engine does a post's before the person asks.
+  let pane: 'none' | 'undrawn' | 'shown' = 'none'
   const opens: { columns?: number }[] = []
   on('ui.open', async (_$, e) => {
     opens.push({ columns: e.columns })
-    if (opts.placed === false) return { value: { isPlaced: false, reason: 'narrow' } }
-    isOpen = true
+    if (opts.placed === false || (opts.waitsUndrawn && pane === 'none')) {
+      pane = 'undrawn'
+      return { value: { isPlaced: false, reason: 'narrow' } }
+    }
+    pane = 'shown'
     return { value: { isPlaced: true } }
   })
-  on('ui.panes', async () => ({ value: isOpen ? [{ id: 'artifacts', title: 'artifacts', isShown: true, isFocused: false, isPlaced: true }] : [] }))
+  on('ui.panes', async () => ({
+    value: pane === 'none' ? [] : [{ id: 'artifacts', title: 'artifacts', isShown: pane === 'shown', isFocused: false, isPlaced: pane === 'shown' }],
+  }))
   on('ui.close', async () => {
-    isOpen = false
+    pane = 'none'
     return { value: undefined }
   })
   const toasts: string[] = []
@@ -239,6 +246,21 @@ describe('the project', () => {
 })
 
 describe('the list tool', () => {
+  test('an unreadable file is listed by its name, kind ?, and the rest still list', async ($, on) => {
+    const files: Files = new Map()
+    const unreadable = new Set<string>()
+    disk(on, files, false, unreadable)
+    session(on)
+    await start($)
+    await show($, { title: 'Auth flow', body: 'y', kind: 'diagram' })
+    const locked = `${folder(files)}/2026-10-12-locked.md`
+    files.set(locked, { text: 'secret', mtimeMs: NOW })
+    unreadable.add(locked)
+    const r = (await list($)).result as string
+    expect(r).toMatch(/^2026-10-15-auth-flow · diagram · v1 · /m)
+    expect(r).toMatch(/^2026-10-12-locked · \? · v1 · .* · 2026-10-12-locked$/m)
+  })
+
   test('newest first, with the folder named first; query and limit', async ($, on) => {
     const files: Files = new Map()
     disk(on, files)
@@ -339,6 +361,17 @@ describe('the list', () => {
     await ui.unmount()
   })
 
+  test("a failed post's error stays under the header after the folder is read again", async ($, on) => {
+    disk(on, new Map(), true)
+    session(on)
+    await start($)
+    expect((await show($, { title: 'T', body: 'x' })).deny).toMatch(/EACCES/)
+    await toggle($) // reads the folder: nothing there, and no read error
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'error' }))?.text).toMatch(/EACCES/)
+    await ui.unmount()
+  })
+
   test('/artifacts-pane again closes it', async ($, on) => {
     disk(on, new Map())
     session(on)
@@ -349,6 +382,18 @@ describe('the list', () => {
 })
 
 describe('refreshing', () => {
+  test('a pane waiting undrawn is not read on the timer', async ($, on) => {
+    const clock = mock.clock(on)
+    const files: Files = new Map()
+    const io = disk(on, files)
+    session(on, { clock: false, placed: false })
+    await start($)
+    await show($, { title: 'T', body: 'x' })
+    io.lists = 0
+    await clock.advance(10_000)
+    expect(io.lists).toBe(0)
+  })
+
   test('while open, the folder is read every 5 s; closed, not at all', async ($, on) => {
     const clock = mock.clock(on)
     const files: Files = new Map()
@@ -370,7 +415,7 @@ describe('refreshing', () => {
 })
 
 describe('the reader', () => {
-  const posted = async ($: E, on: On, opts: { placed?: boolean } = {}) => {
+  const posted = async ($: E, on: On, opts: { placed?: boolean; waitsUndrawn?: boolean } = {}) => {
     const files: Files = new Map()
     disk(on, files)
     const s = session(on, opts)
@@ -450,6 +495,13 @@ describe('the reader', () => {
     await toggle($)
     expect(opens.map(o => o.columns)).toEqual([undefined, 70])
     await ui.unmount()
+  })
+
+  test('after a post that waits undrawn, /artifacts-pane opens the pane rather than closing it', async ($, on) => {
+    const { toasts } = await posted($, on, { waitsUndrawn: true })
+    await show($, { title: 'Auth flow', body: 'x' })
+    expect(toasts.at(-1)).toBe('posted Auth flow · /artifacts-pane')
+    expect((await toggle($)).text).toBe('artifacts opened.')
   })
 
   test('a post the engine will not place unasked becomes a toast', async ($, on) => {
