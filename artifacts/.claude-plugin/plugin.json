@@ -1,0 +1,18 @@
+{
+  "name": "artifacts",
+  "version": "0.1.0",
+  "description": "Claude posts designs, plans and diagrams to a pane; each project keeps a versioned history in ~/.claude/artifacts/",
+  "author": { "name": "Russell Pope", "url": "https://github.com/russellpope" },
+  "homepage": "https://github.com/russellpope/claude-mods/tree/main/artifacts",
+  "repository": "https://github.com/russellpope/claude-mods",
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "editor": {
+      "type": "string",
+      "title": "Editor command",
+      "description": "Command that opens an artifact's file; the path is added as the last argument (e.g. zed, code -r, subl)",
+      "default": "zed"
+    }
+  }
+}
