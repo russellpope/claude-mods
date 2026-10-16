@@ -15,13 +15,13 @@ Success: in a kintsugi session, after Claude designs something, the pane opens o
 | Mod name, command | `artifacts/` in this repo. `/artifacts` toggles the pane. |
 | How Claude posts | Through two tools the mod registers (`$.tool.register`): `mcp__artifacts__show` and `mcp__artifacts__list`. |
 | When Claude posts | Without being asked, when it helps: designs, plans, flow or architecture diagrams, comparisons of options, and a map of what was built after a substantial change. Never small edits, or answers that fit in chat. Always when the owner asks. This guidance lives in `show`'s description, which the model reads. |
-| Content | Markdown, drawn by the engine's `Markdown` element as it draws a reply: tables, code fences, links. Diagrams use box-drawing characters and stay within 76 columns. |
+| Content | Markdown, drawn by the engine's `Markdown` element as it draws a reply: tables, code fences, links. Diagrams use box-drawing characters and stay within 64 columns, so they fit a dock half as wide as a 140-column terminal. |
 | Where history lives | `~/.claude/artifacts/<project>/`, outside every repo. |
 | Project | `$.session.repo().root`, which for a worktree is "the main working tree's", so every worktree and session of a repo shares one history. Outside a repo, `$.session.root()`. The folder name is the root's base name plus an 8-hex-digit hash of the whole path (`kintsugi-1a2b3c4d`), so two repos with the same name stay apart. |
 | Versions | `show` with the `id` of an earlier artifact adds a version. The latest is the artifact's file; earlier versions are kept beside it. |
 | Keep in repo | A reader button copies the latest version to `docs/artifacts/<id>.md` in the session's own checkout (`$.session.root()`). It never commits. |
 | Opening | Every `show` opens the pane on the new artifact. The engine refuses a plugin's own open "below 144 terminal columns, 110 once they asked for that id". When it does, a toast says `posted <title> · /artifacts`. |
-| Reading width | The reader asks the dock for 100 columns (`ui.open({ columns: 100 })`). A width the owner dragged the dock to wins. |
+| Reading width | The reader asks the dock for half the terminal's width, at most 100 columns (`ui.open({ columns })`, with the width taken from the last render's `viewport.columns`). On the owner's 140-column session that is 70, leaving the transcript 70. A width the owner dragged the dock to wins. |
 | Editor | An `editor` setting, as in outputs-pane: a command line with the path added last, default `zed`. |
 
 ## Storage
