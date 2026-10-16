@@ -1,18 +1,18 @@
 # artifacts: design
 
-Date: 2026-10-15. Status: approved in brainstorming, pending spec review.
+Date: 2026-10-15. Status: approved in brainstorming, pending spec review. Amended 2026-10-15 in execution, from the live check and the final review: the command's name, the reader's width source, how a version is kept, unreadable files, and how long a write error shows.
 
 ## Goal
 
 Make artifacts part of the Claude Code CLI. Claude posts designs, plans, diagrams, comparisons and maps of what it built to a pane, and each project keeps a history the owner can browse later, without opening other tools.
 
-Success: in a kintsugi session, after Claude designs something, the pane opens on a box-drawing diagram of it. A week later, `/artifacts` in any worktree of kintsugi lists that diagram along with everything else posted for the repo, and every earlier version can still be read.
+Success: in a kintsugi session, after Claude designs something, the pane opens on a box-drawing diagram of it. A week later, `/artifacts-pane` in any worktree of kintsugi lists that diagram along with everything else posted for the repo, and every earlier version can still be read.
 
 ## Decisions
 
 | Topic | Decision |
 | --- | --- |
-| Mod name, command | `artifacts/` in this repo. `/artifacts` toggles the pane. |
+| Mod name, command | `artifacts/` in this repo. `/artifacts-pane` toggles the pane. Claude Code has a built-in `/artifacts` and refuses a plugin command by that name. |
 | How Claude posts | Through two tools the mod registers (`$.tool.register`): `mcp__artifacts__show` and `mcp__artifacts__list`. |
 | When Claude posts | Without being asked, when it helps: designs, plans, flow or architecture diagrams, comparisons of options, and a map of what was built after a substantial change. Never small edits, or answers that fit in chat. Always when the owner asks. This guidance lives in `show`'s description, which the model reads. |
 | Content | Markdown, drawn by the engine's `Markdown` element as it draws a reply: tables, code fences, links. Diagrams use box-drawing characters and stay within 64 columns, so they fit a dock half as wide as a 140-column terminal. |
@@ -20,8 +20,8 @@ Success: in a kintsugi session, after Claude designs something, the pane opens o
 | Project | `$.session.repo().root`, which for a worktree is "the main working tree's", so every worktree and session of a repo shares one history. Outside a repo, `$.session.root()`. The folder name is the root's base name plus an 8-hex-digit hash of the whole path (`kintsugi-1a2b3c4d`), so two repos with the same name stay apart. |
 | Versions | `show` with the `id` of an earlier artifact adds a version. The latest is the artifact's file; earlier versions are kept beside it. |
 | Keep in repo | A reader button copies the latest version to `docs/artifacts/<id>.md` in the session's own checkout (`$.session.root()`). It never commits. |
-| Opening | Every `show` opens the pane on the new artifact. The engine refuses a plugin's own open "below 144 terminal columns, 110 once they asked for that id". When it does, a toast says `posted <title> · /artifacts`. |
-| Reading width | The reader asks the dock for half the terminal's width, at most 100 columns (`ui.open({ columns })`, with the width taken from the last render's `viewport.columns`). On the owner's 140-column session that is 70, leaving the transcript 70. A width the owner dragged the dock to wins. |
+| Opening | Every `show` opens the pane on the new artifact. The engine refuses a plugin's own open "below 144 terminal columns, 110 once they asked for that id". When it does, a toast says `posted <title> · /artifacts-pane`. The refused pane waits undrawn (`ui.panes` lists it with `isPlaced: false`), and `/artifacts-pane` opens it. |
+| Reading width | The reader asks the dock for half the terminal's width, at most 100 columns (`ui.open({ columns })`). `/artifacts-pane` takes the width from its own `presentation.columns`, the terminal's. A post takes it from the last render's `viewport.columns`, which beside another docked pane is the transcript's width, so it asks for a little less; before any render it asks for nothing. On the owner's 140-column session that is 70, leaving the transcript 70. A width the owner dragged the dock to wins, and Claude Code keeps it across sessions (`dockColumns`). |
 | Editor | An `editor` setting, as in outputs-pane: a command line with the path added last, default `zed`. |
 
 ## Storage
@@ -36,8 +36,8 @@ Success: in a kintsugi session, after Claude designs something, the pane opens o
         v1.md                        earlier versions, never edited
 ```
 
-- **id**: the file name without `.md`. It is the creation date, then a slug of the title (lowercase letters, digits and hyphens, at most 48 characters), then `-2`, `-3` and so on if that name is taken. The id never changes, even when a later version retitles the artifact.
-- **New version**: the current file moves to `.versions/<id>/v<N>.md`, and the new version is written in its place. No version exists twice.
+- **id**: the file name without `.md`. It is the local calendar date of its creation, then a slug of the title (lowercase letters, digits and hyphens, at most 48 characters), then `-2`, `-3` and so on if that name is taken. The id never changes, even when a later version retitles the artifact.
+- **New version**: the current file is copied to `.versions/<id>/v<N>.md` byte for byte (the engine's fs has no rename), then the new version is written in its place. The version number comes from the file's own header, not a cache.
 - **Header**: each file opens with frontmatter that the pane reads and a person can skim:
 
   ```
@@ -108,8 +108,8 @@ diagram · v2 of 2 · 2m ago · artifacts
 
 ## Errors
 
-- **A write fails** (permissions, disk full): the tool returns the error in the engine's words, and the pane shows it on a line under the header.
-- **A file without frontmatter** (hand-written or edited): it is listed by its file name with kind `?`, and the reader shows its text as markdown.
+- **A write fails** (permissions, disk full): the tool returns the error in the engine's words, and the pane shows it on a line under the header until a post succeeds.
+- **A file without frontmatter** (hand-written or edited): it is listed by its file name with kind `?`, and the reader shows its text as markdown. A file that can't be read is listed the same way, and the rest of the list still reads.
 - **Two sessions add a version to one artifact at once**: one of the two versions may be lost. That is unlikely enough to leave as documented, rather than lock.
 
 ## Testing
