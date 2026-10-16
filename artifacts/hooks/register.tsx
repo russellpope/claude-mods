@@ -8,6 +8,7 @@ import type { PaneActions } from './pane'
 import { checkShow, listText, matchesQuery, newestFirst } from './store'
 
 export const PANE = 'artifacts'
+export const COMMAND = 'artifacts-pane'
 const TITLE = 'artifacts'
 const POLL_MS = 5000
 const DEFAULT_EDITOR = 'zed'
@@ -45,13 +46,17 @@ async function isPaneOpen($: EngineInterface): Promise<boolean> {
   return mayBeOpen
 }
 
-// The terminal's width, from the last render that reported it; 0 before one has.
+// The width the last render reported; 0 before one has. Beside a docked pane it is the transcript's, not the terminal's.
 let viewportColumns = 0
 
-/** Opens the pane, asking the dock for half the terminal (at most 100) once the width is known. */
-export async function openPane($: EngineInterface) {
+/**
+ * Opens the pane, asking the dock for half the terminal (at most 100) once a width is known:
+ * `terminalColumns` when the caller measured it (a command's presentation), else the last render's.
+ */
+export async function openPane($: EngineInterface, terminalColumns?: number) {
   mayBeOpen = true
-  const columns = viewportColumns ? Math.min(100, Math.floor(viewportColumns / 2)) : undefined
+  const width = terminalColumns || viewportColumns
+  const columns = width ? Math.min(100, Math.floor(width / 2)) : undefined
   return $.ui.open({ id: PANE, title: TITLE, ...(columns ? { columns } : {}) })
 }
 
@@ -107,7 +112,8 @@ export const register: Register = (on, options) => {
         },
       },
     })
-    await $.command.register({ name: 'artifacts', description: 'Show or hide the designs, plans and diagrams posted for this project' })
+    // Claude Code has a built-in /artifacts, and refuses a plugin command by that name.
+    await $.command.register({ name: COMMAND, description: 'Show or hide the designs, plans and diagrams posted for this project' })
     // A resumed session may still have the pane open: the poll finds out.
     mayBeOpen = true
     await isPaneOpen($).catch(() => false)
@@ -119,14 +125,14 @@ export const register: Register = (on, options) => {
     return started
   })
 
-  on('command.run', { command: 'artifacts' }, async $ => {
+  on('command.run', { command: COMMAND }, async ($, e) => {
     mayBeOpen = true
     if (await isPaneOpen($)) {
       await $.ui.close({ id: PANE })
       return { text: 'artifacts closed.' }
     }
     await update($, pane, () => ({ view: 'list' }) as PaneView)
-    await openPane($)
+    await openPane($, e.presentation?.columns)
     await refresh($)
     return { text: 'artifacts opened.' }
   })
@@ -141,7 +147,7 @@ export const register: Register = (on, options) => {
       await refresh($)
       await openReader($, meta.id)
       const placed = await openPane($).catch(() => ({ isPlaced: false as const }))
-      if (!placed.isPlaced) $.ui.toast(`posted ${meta.title} · /artifacts`)
+      if (!placed.isPlaced) $.ui.toast(`posted ${meta.title} · /${COMMAND}`)
       return { result: `posted ${meta.id} v${meta.version} · ${tilde(`${dir}/${meta.id}.md`, home)}` }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)

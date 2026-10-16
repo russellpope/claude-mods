@@ -73,10 +73,17 @@ const session = (on: On, opts: { home?: string | null; repo?: string | null; pla
     toasts.push(e.text)
     return { value: undefined }
   })
-  on('tool.register', async (_$, e) => ({ value: { tool: `mcp__artifacts__${e.name}` } }))
-  on('command.register', async (_$, e) => ({ value: { command: e.name } }))
+  const registered: { tools: { name: string; isDeferred?: unknown }[]; commands: string[] } = { tools: [], commands: [] }
+  on('tool.register', async (_$, e) => {
+    registered.tools.push({ name: e.name, isDeferred: e.isDeferred })
+    return { value: { tool: `mcp__artifacts__${e.name}` } }
+  })
+  on('command.register', async (_$, e) => {
+    registered.commands.push(e.name)
+    return { value: { command: e.name } }
+  })
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  return { toasts, runs, opens }
+  return { toasts, runs, opens, registered }
 }
 
 const start = ($: E) => $.session.start({ cwd: WORKTREE, surface: 'terminal', isInteractive: true })
@@ -85,6 +92,19 @@ const list = ($: E, input: Record<string, unknown> = {}) => $.tool.call({ tool: 
 
 /** The project folder for REPO, found the way the mod finds it. */
 const folder = (files: Files) => [...files.keys()].map(p => p.match(/^\/Users\/me\/\.claude\/artifacts\/[^/]+/)?.[0]).find(Boolean) ?? ''
+
+describe('the session start', () => {
+  test('registers /artifacts-pane (Claude Code has a built-in /artifacts) and both tools, neither deferred', async ($, on) => {
+    disk(on, new Map())
+    const { registered } = session(on)
+    await start($)
+    expect(registered.commands).toEqual(['artifacts-pane'])
+    expect(registered.tools).toEqual([
+      { name: 'show', isDeferred: false },
+      { name: 'list', isDeferred: false },
+    ])
+  })
+})
 
 describe('the show tool', () => {
   test('writes the artifact with its header and answers one line', async ($, on) => {
@@ -239,10 +259,10 @@ const mount = ($: E, cols = 60) =>
   $.ui.mount({ plugin: 'artifacts', surface: 'terminal', component: 'Pane', requestId: 'artifacts', props: PANE_PROPS(cols), viewport: { columns: 140, rows: 50 } })
 const rowsOf = async (ui: { findAll: (q: { type: string }) => Promise<{ key: string | undefined }[]> }) =>
   (await ui.findAll({ type: 'Box' })).filter(r => r.key?.startsWith('row-'))
-const toggle = ($: E) => $.command.run({ command: 'artifacts', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 140 } })
+const toggle = ($: E) => $.command.run({ command: 'artifacts-pane', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 140 } })
 
 describe('the list', () => {
-  test('/artifacts opens the list: project, count, newest first, this session marked', async ($, on) => {
+  test('/artifacts-pane opens the list: project, count, newest first, this session marked', async ($, on) => {
     const files: Files = new Map()
     disk(on, files)
     session(on)
@@ -319,7 +339,7 @@ describe('the list', () => {
     await ui.unmount()
   })
 
-  test('/artifacts again closes it', async ($, on) => {
+  test('/artifacts-pane again closes it', async ($, on) => {
     disk(on, new Map())
     session(on)
     await start($)
@@ -421,9 +441,20 @@ describe('the reader', () => {
     await ui.unmount()
   })
 
+  test('/artifacts-pane asks for half the terminal as the command measures it, though a render beside another dock reports less', async ($, on) => {
+    const { opens } = await posted($, on)
+    await show($, { title: 'A', body: 'x' })
+    // Beside a docked pane, the render's viewport is the transcript's width, not the terminal's (140 here).
+    const ui = await $.ui.mount({ plugin: 'artifacts', surface: 'terminal', component: 'Pane', requestId: 'artifacts', props: PANE_PROPS(26), viewport: { columns: 113, rows: 50 } })
+    await toggle($) // closes the reader the post opened
+    await toggle($)
+    expect(opens.map(o => o.columns)).toEqual([undefined, 70])
+    await ui.unmount()
+  })
+
   test('a post the engine will not place unasked becomes a toast', async ($, on) => {
     const { toasts } = await posted($, on, { placed: false })
     await show($, { title: 'Auth flow', body: 'x' })
-    expect(toasts.at(-1)).toBe('posted Auth flow · /artifacts')
+    expect(toasts.at(-1)).toBe('posted Auth flow · /artifacts-pane')
   })
 })
