@@ -41,7 +41,7 @@ const disk = (on: On, files: Files, failWrites = false) => {
   return io
 }
 
-/** A session in a worktree of kintsugi, on branch `artifacts`, at NOW; returns the toasts it shows. */
+/** A session in a worktree of kintsugi, on branch `artifacts`, at NOW; returns the toasts it shows, the commands it runs and the opens it asks. */
 const session = (on: On, opts: { home?: string | null; repo?: string | null; placed?: boolean; clock?: boolean } = {}) => {
   mock.env(on, opts.home === null ? {} : { HOME: opts.home ?? HOME })
   // A test driving mock.clock passes clock: false, so this hook doesn't answer clock.now beneath it.
@@ -50,9 +50,15 @@ const session = (on: On, opts: { home?: string | null; repo?: string | null; pla
   on('session.root', async () => ({ value: WORKTREE }))
   on('session.cwd', async () => ({ value: WORKTREE }))
   on('session.id', async () => ({ value: 's-1' }))
-  on('process.run', async () => ({ value: { exitCode: 0, stdout: 'artifacts\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  const runs: string[][] = []
+  on('process.run', async (_$, e) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: e.argv[0] === 'git' ? 'artifacts\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   let isOpen = false
-  on('ui.open', async () => {
+  const opens: { columns?: number }[] = []
+  on('ui.open', async (_$, e) => {
+    opens.push({ columns: e.columns })
     if (opts.placed === false) return { value: { isPlaced: false, reason: 'narrow' } }
     isOpen = true
     return { value: { isPlaced: true } }
@@ -70,7 +76,7 @@ const session = (on: On, opts: { home?: string | null; repo?: string | null; pla
   on('tool.register', async (_$, e) => ({ value: { tool: `mcp__artifacts__${e.name}` } }))
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  return { toasts }
+  return { toasts, runs, opens }
 }
 
 const start = ($: E) => $.session.start({ cwd: WORKTREE, surface: 'terminal', isInteractive: true })
@@ -247,6 +253,7 @@ describe('the list', () => {
     const dir = folder(files)
     const threeDaysAgo = new Date(NOW - 3 * 86_400_000).toISOString()
     files.set(`${dir}/2026-10-12-old.md`, { text: `---\ntitle: Old one\nkind: notes\nversion: 3\ncreated: ${threeDaysAgo}\nupdated: ${threeDaysAgo}\nbranch: \nsession: s-0\n---\n\nz\n`, mtimeMs: NOW })
+    expect((await toggle($)).text).toBe('artifacts closed.') // the post opened it on the reader
     expect((await toggle($)).text).toBe('artifacts opened.')
     const ui = await mount($)
     expect((await ui.find({ type: 'Box', key: 'head' }))?.text).toMatch(/^artifacts · kintsugi\s*3$/)
@@ -263,6 +270,7 @@ describe('the list', () => {
     await start($)
     await show($, { title: 'Release plan', body: 'x', kind: 'plan' })
     await show($, { title: 'Auth flow', body: 'y', kind: 'diagram' })
+    await toggle($) // closes the reader the post opened
     await toggle($)
     const ui = await mount($)
     await ui.input({ key: 'filter', text: 'DIAG', kind: 'change' })
@@ -278,6 +286,7 @@ describe('the list', () => {
     await start($)
     await show($, { title: 'Auth flow', body: 'y', kind: 'comparison' })
     await show($, { id: '2026-10-15-auth-flow', title: 'Auth flow', body: 'z' })
+    await toggle($) // closes the reader the post opened
     await toggle($)
     for (const [cols, re] of [
       [44, /^●\s*Auth flow\s*comparison\s*v2\s*0s$/],
@@ -326,11 +335,10 @@ describe('refreshing', () => {
     const io = disk(on, files)
     session(on, { clock: false })
     await start($)
-    await show($, { title: 'T', body: 'x' })
     io.lists = 0
     await clock.advance(10_000)
     expect(io.lists).toBe(0) // never opened
-    await toggle($)
+    await show($, { title: 'T', body: 'x' }) // opens the pane on it
     io.lists = 0
     await clock.advance(10_000)
     expect(io.lists).toBe(2)
@@ -338,5 +346,84 @@ describe('refreshing', () => {
     io.lists = 0
     await clock.advance(10_000)
     expect(io.lists).toBe(0)
+  })
+})
+
+describe('the reader', () => {
+  const posted = async ($: E, on: On, opts: { placed?: boolean } = {}) => {
+    const files: Files = new Map()
+    disk(on, files)
+    const s = session(on, opts)
+    await start($)
+    return { files, ...s }
+  }
+
+  test('a post opens the reader on it: title, kind, version, age, branch, body', async ($, on) => {
+    await posted($, on)
+    await show($, { title: 'Auth flow', body: '## Flow\n\nA → B', kind: 'diagram' })
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'title' }))?.text).toBe('Auth flow')
+    expect((await ui.find({ type: 'Box', key: 'meta' }))?.text).toBe('diagram · v1 of 1 · 0s ago · artifacts')
+    expect((await ui.find({ type: 'Box', key: 'body' }))?.text).toContain('A → B')
+    await ui.press({ key: 'back' })
+    expect(await ui.find({ type: 'Box', key: 'head' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the filter: Enter opens the first match in the reader', async ($, on) => {
+    await posted($, on)
+    await show($, { title: 'Release plan', body: 'x', kind: 'plan' })
+    await toggle($) // to the list
+    await toggle($)
+    const ui = await mount($)
+    await ui.input({ key: 'filter', text: 'plan' })
+    expect((await ui.find({ type: 'Box', key: 'title' }))?.text).toBe('Release plan')
+    await ui.unmount()
+  })
+
+  test('earlier versions: one button each; pressing one shows it, saying which of how many', async ($, on) => {
+    await posted($, on)
+    await show($, { title: 'Auth flow', body: 'first' })
+    await show($, { id: '2026-10-15-auth-flow', title: 'Auth flow', body: 'second' })
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'body' }))?.text).toContain('second')
+    await ui.press({ key: 'version-1' })
+    expect((await ui.find({ type: 'Box', key: 'meta' }))?.text).toMatch(/^notes · v1 of 2 · /)
+    expect((await ui.find({ type: 'Box', key: 'body' }))?.text).toContain('first')
+    await ui.unmount()
+  })
+
+  test('open runs the editor on the version shown', async ($, on) => {
+    const { files, runs } = await posted($, on)
+    await show($, { title: 'Auth flow', body: 'x' })
+    const ui = await mount($)
+    await ui.press({ key: 'editor' })
+    expect(runs.filter(argv => argv[0] !== 'git')).toEqual([['zed', `${folder(files)}/2026-10-15-auth-flow.md`]])
+    await ui.unmount()
+  })
+
+  test('keep in repo writes docs/artifacts/<id>.md in the session checkout, and says where', async ($, on) => {
+    const { files, toasts } = await posted($, on)
+    await show($, { title: 'Auth flow', body: 'x' })
+    const ui = await mount($)
+    await ui.press({ key: 'keep' })
+    expect(files.get(`${WORKTREE}/docs/artifacts/2026-10-15-auth-flow.md`)?.text).toBe(files.get(`${folder(files)}/2026-10-15-auth-flow.md`)?.text)
+    expect(toasts.at(-1)).toBe('kept · docs/artifacts/2026-10-15-auth-flow.md')
+    await ui.unmount()
+  })
+
+  test('the reader asks the dock for half the terminal, at most 100', async ($, on) => {
+    const { opens } = await posted($, on)
+    await show($, { title: 'A', body: 'x' })
+    const ui = await mount($) // a render reports viewport.columns 140
+    await show($, { title: 'B', body: 'y' })
+    expect(opens.map(o => o.columns)).toEqual([undefined, 70])
+    await ui.unmount()
+  })
+
+  test('a post the engine will not place unasked becomes a toast', async ($, on) => {
+    const { toasts } = await posted($, on, { placed: false })
+    await show($, { title: 'Auth flow', body: 'x' })
+    expect(toasts.at(-1)).toBe('posted Auth flow · /artifacts')
   })
 })

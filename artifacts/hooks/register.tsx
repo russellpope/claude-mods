@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { HistoryView, PaneView, Shown } from '../types'
-import { ShowError, historyDir, post, readArtifact, readHistory, tilde } from './history'
+import { ShowError, historyDir, keepInRepo, post, readArtifact, readHistory, tilde } from './history'
 import { drawPane } from './pane'
 import type { PaneActions } from './pane'
 import { checkShow, listText, matchesQuery, newestFirst } from './store'
@@ -139,6 +139,9 @@ export const register: Register = (on, options) => {
       const meta = await post($, dir, args, await $.clock.now())
       await update($, mine, ids => (ids.includes(meta.id) ? ids : [...ids, meta.id]))
       await refresh($)
+      await openReader($, meta.id)
+      const placed = await openPane($).catch(() => ({ isPlaced: false as const }))
+      if (!placed.isPlaced) $.ui.toast(`posted ${meta.title} · /artifacts`)
       return { result: `posted ${meta.id} v${meta.version} · ${tilde(`${dir}/${meta.id}.md`, home)}` }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
@@ -161,6 +164,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     if (e.viewport?.columns) viewportColumns = e.viewport.columns
     const h = await read($, history)
+    const sNow = await read($, shown)
+    const editorName = editorArgv(options.editor, '')[0]?.split('/').pop() ?? DEFAULT_EDITOR
     const act: PaneActions = {
       filter: text => void update($, query, () => text).catch(() => undefined),
       openFirst: text =>
@@ -172,20 +177,43 @@ export const register: Register = (on, options) => {
         })().catch(() => undefined),
       open: id => void openReader($, id).catch(() => undefined),
       back: () => void update($, pane, () => ({ view: 'list' }) as PaneView).catch(() => undefined),
-      version: () => undefined, // Task 4
-      editor: () => undefined, // Task 4
-      keep: () => undefined, // Task 4
+      version: n => {
+        const s0 = sNow
+        if (s0) void openReader($, s0.meta.id, n).catch(() => undefined)
+      },
+      editor: () => {
+        const s0 = sNow
+        if (!s0) return
+        void (async () => {
+          const ran = await $.process.run(editorArgv(options.editor, s0.path)).catch((err: unknown) => ({ exitCode: -1, stderr: String(err) }))
+          if (ran.exitCode !== 0) $.ui.toast(`${editorName} failed: ${ran.stderr.slice(0, 80)}`)
+        })()
+      },
+      keep: () => {
+        const s0 = sNow
+        if (!s0) return
+        void (async () => {
+          try {
+            const { dir } = await historyDir($)
+            const path = await keepInRepo($, dir, s0.meta.id)
+            const root = await $.session.root()
+            $.ui.toast(`kept · ${path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path}`)
+          } catch (err) {
+            $.ui.toast(`keep in repo failed: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        })()
+      },
     }
     return drawPane($.ui.resolve(e), {
       history: h,
       pane: await read($, pane),
       query: await read($, query),
       mine: await read($, mine),
-      shown: await read($, shown),
+      shown: sNow,
       now: await $.clock.now(),
       cols: e.props.bodyColumns || 60,
       surface: e.surface,
-      editor: editorArgv(options.editor, '')[0]?.split('/').pop() ?? DEFAULT_EDITOR,
+      editor: editorName,
       act,
     })
   })

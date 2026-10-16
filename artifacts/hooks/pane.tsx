@@ -102,7 +102,37 @@ function drawList(ui: UI, m: PaneModel) {
   )
 }
 
-// Task 4 replaces this with the reader.
-function drawReader(ui: UI, m: PaneModel, _shown: Shown) {
-  return drawList(ui, m)
+function drawReader(ui: UI, m: PaneModel, s: Shown) {
+  const { Box, Text, Button, Markdown } = ui
+  const meta = [s.meta.kind, `v${s.meta.version} of ${s.latest}`, `${fmtAge(m.now - Date.parse(s.meta.updated))} ago`, s.meta.branch].filter(Boolean).join(' · ')
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Box flexDirection="column">
+        <Button plain key="back" label="← list" onPress={m.act.back} />
+        <Box key="title">
+          <Text bold wrap="truncate-end">{s.meta.title}</Text>
+        </Box>
+        <Box key="meta">
+          <Text dimColor wrap="truncate-end">{meta}</Text>
+        </Box>
+      </Box>
+      <Box key="body" flexDirection="column">
+        <Markdown text={s.body} />
+      </Box>
+      <Box key="actions" flexDirection="row" flexWrap="wrap" columnGap={2}>
+        {s.latest > 1
+          ? Array.from({ length: s.latest }, (_, i) => i + 1).map(n =>
+              // A Button takes no bold: the version shown wears brackets, the others are dim.
+              n === s.meta.version ? (
+                <Button key={`version-${n}`} plain label={`[v${n}]`} onPress={() => m.act.version(n)} />
+              ) : (
+                <Button key={`version-${n}`} plain dimColor label={`v${n}`} onPress={() => m.act.version(n)} />
+              ),
+            )
+          : null}
+        <Button key="editor" plain label={`open in ${m.editor}`} onPress={m.act.editor} />
+        <Button key="keep" plain label="keep in repo" onPress={m.act.keep} />
+      </Box>
+    </Box>
+  )
 }
