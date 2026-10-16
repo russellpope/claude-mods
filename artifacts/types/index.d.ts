@@ -42,4 +42,10 @@ declare module 'claude-code' {
       shown: Shown | null
     }
   }
+
+  /** The mod's own tools, so `{ tool: "mcp__artifacts__…" }` names one whatever MCP servers the types were saved with. */
+  interface McpToolInputs {
+    mcp__artifacts__show: { title: string; body: string; kind?: string; id?: string }
+    mcp__artifacts__list: { query?: string; limit?: number }
+  }
 }

@@ -96,7 +96,7 @@ export function checkShow(input: Record<string, unknown>): ShowArgs | { error: s
   const id = text(input.id).trim()
   if (!title) return { error: 'title is empty' }
   if (!body.trim()) return { error: 'body is empty' }
-  if (body.length > MAX_BODY) return { error: `body is ${body.length.toLocaleString('en-US')} characters, over the limit of 60,000 characters: split it into several artifacts` }
+  if (body.length > MAX_BODY) return { error: `body is ${body.length.toLocaleString('en-US')} characters, over 60,000 characters: split it into several artifacts` }
   return { title, body, ...(kind ? { kind } : {}), ...(id ? { id } : {}) }
 }
 
