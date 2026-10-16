@@ -12,8 +12,9 @@ const NOW = new Date(2026, 9, 15, 14, 2, 11).getTime()
 
 type Files = Map<string, { text: string; mtimeMs: number }>
 
-/** An in-memory disk under the fs ops: write, read, exists, list (files and the folders they imply). */
+/** An in-memory disk under the fs ops: write, read, exists, list (files and the folders they imply); counts the lists. */
 const disk = (on: On, files: Files, failWrites = false) => {
+  const io = { lists: 0 }
   on('fs.write', async (_$, e) => {
     // An op hook refuses with { deny }; a hook that throws is skipped, and the write would go on beneath it.
     if (failWrites) return { deny: `EACCES: permission denied, open '${e.path}'` }
@@ -27,6 +28,7 @@ const disk = (on: On, files: Files, failWrites = false) => {
   })
   on('fs.exists', async (_$, e) => ({ value: files.has(e.path) || [...files.keys()].some(p => p.startsWith(`${e.path}/`)) }))
   on('fs.list', async (_$, e) => {
+    io.lists++
     const prefix = `${e.path.replace(/\/$/, '')}/`
     const seen = new Map<string, { name: string; kind: 'file' | 'dir'; size: number; mtimeMs: number; isLink: boolean }>()
     for (const [path, f] of files) {
@@ -36,6 +38,7 @@ const disk = (on: On, files: Files, failWrites = false) => {
     }
     return { value: [...seen.values()] }
   })
+  return io
 }
 
 /** A session in a worktree of kintsugi, on branch `artifacts`, at NOW; returns the toasts it shows. */
@@ -65,6 +68,7 @@ const session = (on: On, opts: { home?: string | null; repo?: string | null; pla
     return { value: undefined }
   })
   on('tool.register', async (_$, e) => ({ value: { tool: `mcp__artifacts__${e.name}` } }))
+  on('command.register', async (_$, e) => ({ value: { command: e.name } }))
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   return { toasts }
 }
@@ -129,6 +133,42 @@ describe('the show tool', () => {
     expect(v2).toContain('\nversion: 2\n')
   })
 
+  test('three versions in a row: each kept once under .versions, none overwritten', async ($, on) => {
+    const files: Files = new Map()
+    disk(on, files)
+    session(on)
+    await start($)
+    await show($, { title: 'Auth flow', body: 'one' })
+    const dir = folder(files)
+    const v1 = files.get(`${dir}/2026-10-15-auth-flow.md`)?.text
+    await show($, { id: '2026-10-15-auth-flow', title: 'Auth flow', body: 'two' })
+    const v2 = files.get(`${dir}/2026-10-15-auth-flow.md`)?.text
+    const r = await show($, { id: '2026-10-15-auth-flow', title: 'Auth flow', body: 'three' })
+    expect(r.result).toMatch(/^posted 2026-10-15-auth-flow v3 · /)
+    expect(files.get(`${dir}/.versions/2026-10-15-auth-flow/v1.md`)?.text).toBe(v1)
+    expect(files.get(`${dir}/.versions/2026-10-15-auth-flow/v2.md`)?.text).toBe(v2)
+    expect(files.get(`${dir}/2026-10-15-auth-flow.md`)?.text).toContain('\nversion: 3\n')
+  })
+
+  test('a version another session added within the same mtime is read from the file, not a cached header', async ($, on) => {
+    const files: Files = new Map()
+    disk(on, files)
+    session(on)
+    await start($)
+    await show($, { title: 'Auth flow', body: 'one' })
+    const dir = folder(files)
+    const latest = `${dir}/2026-10-15-auth-flow.md`
+    const v1 = files.get(latest)?.text ?? ''
+    // Another session's v2: v1 moved under .versions, v2 written in place, at the same mtime this session cached.
+    const v2 = v1.replace('\nversion: 1\n', '\nversion: 2\n').replace('\n\none\n', '\n\ntwo\n')
+    files.set(`${dir}/.versions/2026-10-15-auth-flow/v1.md`, { text: v1, mtimeMs: NOW })
+    files.set(latest, { text: v2, mtimeMs: NOW })
+    const r = await show($, { id: '2026-10-15-auth-flow', title: 'Auth flow', body: 'three' })
+    expect(r.result).toMatch(/^posted 2026-10-15-auth-flow v3 · /)
+    expect(files.get(`${dir}/.versions/2026-10-15-auth-flow/v1.md`)?.text).toBe(v1)
+    expect(files.get(`${dir}/.versions/2026-10-15-auth-flow/v2.md`)?.text).toBe(v2)
+  })
+
   test('refuses an unknown id, pointing at list', async ($, on) => {
     disk(on, new Map())
     session(on)
@@ -185,5 +225,118 @@ describe('the list tool', () => {
     expect(all.split('\n')[0]).toMatch(/^2 of 2 in ~\/\.claude\/artifacts\/kintsugi-[0-9a-f]{8} \(each <id>\.md\):$/)
     expect((await list($, { query: 'plan' })).result).toMatch(/release-plan · plan · v1/)
     expect(((await list($, { limit: 1 })).result as string).split('\n')).toHaveLength(2)
+  })
+})
+
+const PANE_PROPS = (bodyColumns: number) => ({ title: 'artifacts', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} })
+const mount = ($: E, cols = 60) =>
+  $.ui.mount({ plugin: 'artifacts', surface: 'terminal', component: 'Pane', requestId: 'artifacts', props: PANE_PROPS(cols), viewport: { columns: 140, rows: 50 } })
+const rowsOf = async (ui: { findAll: (q: { type: string }) => Promise<{ key: string | undefined }[]> }) =>
+  (await ui.findAll({ type: 'Box' })).filter(r => r.key?.startsWith('row-'))
+const toggle = ($: E) => $.command.run({ command: 'artifacts', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 140 } })
+
+describe('the list', () => {
+  test('/artifacts opens the list: project, count, newest first, this session marked', async ($, on) => {
+    const files: Files = new Map()
+    disk(on, files)
+    session(on)
+    await start($)
+    await show($, { title: 'Release plan', body: 'x', kind: 'plan' })
+    await show($, { title: 'Auth flow', body: 'y', kind: 'diagram' })
+    // One written by another session: same folder, no marker.
+    const dir = folder(files)
+    const threeDaysAgo = new Date(NOW - 3 * 86_400_000).toISOString()
+    files.set(`${dir}/2026-10-12-old.md`, { text: `---\ntitle: Old one\nkind: notes\nversion: 3\ncreated: ${threeDaysAgo}\nupdated: ${threeDaysAgo}\nbranch: \nsession: s-0\n---\n\nz\n`, mtimeMs: NOW })
+    expect((await toggle($)).text).toBe('artifacts opened.')
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'head' }))?.text).toMatch(/^artifacts · kintsugi\s*3$/)
+    const rows = await rowsOf(ui)
+    expect(rows.map(r => r.key)).toEqual(['row-2026-10-15-release-plan', 'row-2026-10-15-auth-flow', 'row-2026-10-12-old'])
+    expect((await ui.find({ type: 'Box', key: 'row-2026-10-15-auth-flow' }))?.text).toMatch(/^●\s*Auth flow\s*diagram\s*0s$/)
+    expect((await ui.find({ type: 'Box', key: 'row-2026-10-12-old' }))?.text).toMatch(/^\s*Old one\s*notes\s*v3\s*3d$/)
+    await ui.unmount()
+  })
+
+  test('the filter narrows by title, kind or id, and the header counts the matches', async ($, on) => {
+    disk(on, new Map())
+    session(on)
+    await start($)
+    await show($, { title: 'Release plan', body: 'x', kind: 'plan' })
+    await show($, { title: 'Auth flow', body: 'y', kind: 'diagram' })
+    await toggle($)
+    const ui = await mount($)
+    await ui.input({ key: 'filter', text: 'DIAG', kind: 'change' })
+    expect((await rowsOf(ui)).map(r => r.key)).toEqual(['row-2026-10-15-auth-flow'])
+    expect((await ui.find({ type: 'Box', key: 'head' }))?.text).toMatch(/1 of 2$/)
+    await ui.unmount()
+  })
+
+  test('a narrow dock drops the kind first, then the version; the age stays', async ($, on) => {
+    const files: Files = new Map()
+    disk(on, files)
+    session(on)
+    await start($)
+    await show($, { title: 'Auth flow', body: 'y', kind: 'comparison' })
+    await show($, { id: '2026-10-15-auth-flow', title: 'Auth flow', body: 'z' })
+    await toggle($)
+    for (const [cols, re] of [
+      [44, /^●\s*Auth flow\s*comparison\s*v2\s*0s$/],
+      [32, /^●\s*Auth flow\s*v2\s*0s$/],
+      [20, /^●\s*Auth flow\s*0s$/],
+    ] as const) {
+      const ui = await mount($, cols)
+      expect((await ui.find({ type: 'Box', key: 'row-2026-10-15-auth-flow' }))?.text).toMatch(re)
+      await ui.unmount()
+    }
+  })
+
+  test('nothing posted yet: a plain line', async ($, on) => {
+    disk(on, new Map())
+    session(on)
+    await start($)
+    await toggle($)
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'empty' }))?.text).toBe('nothing posted yet for kintsugi')
+    await ui.unmount()
+  })
+
+  test('a failed read shows its error under the header, and the pane still draws', async ($, on) => {
+    disk(on, new Map())
+    session(on, { home: null })
+    await start($)
+    await toggle($)
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'error' }))?.text).toMatch(/HOME is not set/)
+    await ui.unmount()
+  })
+
+  test('/artifacts again closes it', async ($, on) => {
+    disk(on, new Map())
+    session(on)
+    await start($)
+    await toggle($)
+    expect((await toggle($)).text).toBe('artifacts closed.')
+  })
+})
+
+describe('refreshing', () => {
+  test('while open, the folder is read every 5 s; closed, not at all', async ($, on) => {
+    const clock = mock.clock(on)
+    const files: Files = new Map()
+    const io = disk(on, files)
+    session(on, { clock: false })
+    await start($)
+    await show($, { title: 'T', body: 'x' })
+    io.lists = 0
+    await clock.advance(10_000)
+    expect(io.lists).toBe(0) // never opened
+    await toggle($)
+    io.lists = 0
+    await clock.advance(10_000)
+    expect(io.lists).toBe(2)
+    await toggle($)
+    io.lists = 0
+    await clock.advance(10_000)
+    expect(io.lists).toBe(0)
   })
 })

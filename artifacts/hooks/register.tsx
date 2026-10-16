@@ -2,10 +2,15 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { HistoryView, PaneView, Shown } from '../types'
-import { ShowError, historyDir, post, readHistory, tilde } from './history'
-import { checkShow, listText } from './store'
+import { ShowError, historyDir, post, readArtifact, readHistory, tilde } from './history'
+import { drawPane } from './pane'
+import type { PaneActions } from './pane'
+import { checkShow, listText, matchesQuery, newestFirst } from './store'
 
 export const PANE = 'artifacts'
+const TITLE = 'artifacts'
+const POLL_MS = 5000
+const DEFAULT_EDITOR = 'zed'
 
 export const EMPTY_HISTORY: HistoryView = { dir: '', project: '', items: [], error: '' }
 export const history = atom({ plugin: 'artifacts', key: 'history' } as const, EMPTY_HISTORY)
@@ -25,6 +30,31 @@ const SHOW_DESCRIPTION = [
 const LIST_DESCRIPTION =
   "List this project's artifacts, newest first: id, kind, version, when updated, title. Use it to find one to revise (pass its id to mcp__artifacts__show) or to read in full (Read <folder>/<id>.md)."
 
+// The editor setting is a command line: the first word is the program, the rest come before the file.
+export const editorArgv = (setting: unknown, path: string): string[] => {
+  const words = (typeof setting === 'string' ? setting : '').trim().split(/\s+/).filter(Boolean)
+  return [...(words.length ? words : [DEFAULT_EDITOR]), path]
+}
+
+// True from the moment this session opens the pane until ui.panes says it is gone.
+let mayBeOpen = false
+
+async function isPaneOpen($: EngineInterface): Promise<boolean> {
+  if (!mayBeOpen) return false
+  mayBeOpen = (await $.ui.panes()).some(p => p.id === PANE)
+  return mayBeOpen
+}
+
+// The terminal's width, from the last render that reported it; 0 before one has.
+let viewportColumns = 0
+
+/** Opens the pane, asking the dock for half the terminal (at most 100) once the width is known. */
+export async function openPane($: EngineInterface) {
+  mayBeOpen = true
+  const columns = viewportColumns ? Math.min(100, Math.floor(viewportColumns / 2)) : undefined
+  return $.ui.open({ id: PANE, title: TITLE, ...(columns ? { columns } : {}) })
+}
+
 /** Reads the history into the atom; a failure is kept as the pane's error line. */
 export async function refresh($: EngineInterface): Promise<HistoryView> {
   try {
@@ -39,7 +69,15 @@ export async function refresh($: EngineInterface): Promise<HistoryView> {
   }
 }
 
-export const register: Register = on => {
+/** Shows one artifact in the reader: its latest version, or `version`. */
+export async function openReader($: EngineInterface, id: string, version?: number) {
+  const { dir } = await historyDir($)
+  const s = await readArtifact($, dir, id, version)
+  await update($, shown, () => s)
+  await update($, pane, () => ({ view: 'reader', id }) as PaneView)
+}
+
+export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.tool.register({
@@ -69,7 +107,28 @@ export const register: Register = on => {
         },
       },
     })
+    await $.command.register({ name: 'artifacts', description: 'Show or hide the designs, plans and diagrams posted for this project' })
+    // A resumed session may still have the pane open: the poll finds out.
+    mayBeOpen = true
+    await isPaneOpen($).catch(() => false)
+    $.clock.every(POLL_MS, () => {
+      void (async () => {
+        if (await isPaneOpen($)) await refresh($)
+      })().catch(() => undefined)
+    })
     return started
+  })
+
+  on('command.run', { command: 'artifacts' }, async $ => {
+    mayBeOpen = true
+    if (await isPaneOpen($)) {
+      await $.ui.close({ id: PANE })
+      return { text: 'artifacts closed.' }
+    }
+    await update($, pane, () => ({ view: 'list' }) as PaneView)
+    await openPane($)
+    await refresh($)
+    return { text: 'artifacts opened.' }
   })
 
   on('tool.call', { tool: 'mcp__artifacts__show' }, async ($, e) => {
@@ -97,5 +156,37 @@ export const register: Register = on => {
     } catch (err) {
       return { deny: err instanceof Error ? err.message : String(err) }
     }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    if (e.viewport?.columns) viewportColumns = e.viewport.columns
+    const h = await read($, history)
+    const act: PaneActions = {
+      filter: text => void update($, query, () => text).catch(() => undefined),
+      openFirst: text =>
+        void (async () => {
+          await update($, query, () => text)
+          const first = newestFirst(h.items).find(a => matchesQuery(a, text))
+          if (first) await openReader($, first.id)
+          else $.ui.toast(`no artifact matches ${text.trim()}`)
+        })().catch(() => undefined),
+      open: id => void openReader($, id).catch(() => undefined),
+      back: () => void update($, pane, () => ({ view: 'list' }) as PaneView).catch(() => undefined),
+      version: () => undefined, // Task 4
+      editor: () => undefined, // Task 4
+      keep: () => undefined, // Task 4
+    }
+    return drawPane($.ui.resolve(e), {
+      history: h,
+      pane: await read($, pane),
+      query: await read($, query),
+      mine: await read($, mine),
+      shown: await read($, shown),
+      now: await $.clock.now(),
+      cols: e.props.bodyColumns || 60,
+      surface: e.surface,
+      editor: editorArgv(options.editor, '')[0]?.split('/').pop() ?? DEFAULT_EDITOR,
+      act,
+    })
   })
 }

@@ -63,16 +63,20 @@ export async function post($: EngineInterface, dir: string, args: ShowArgs, now:
   const stamp = { updated: iso, branch: await currentBranch($), session: await $.session.id() }
   let meta: ArtifactMeta
   if (args.id) {
-    const cur = items.find(m => m.id === args.id)
-    if (!cur) throw new ShowError(`no artifact "${args.id}" in this project; mcp__artifacts__list shows the ids`)
+    const listed = items.find(m => m.id === args.id)
+    if (!listed) throw new ShowError(`no artifact "${args.id}" in this project; mcp__artifacts__list shows the ids`)
+    // The header is read from the file itself, not the cache: a rewrite within one mtime tick would look unchanged there.
+    const text = await $.fs.read(`${dir}/${listed.id}.md`)
+    const cur = parseFile(listed.id, text, Date.parse(listed.updated)).meta
     // fs has no rename: the version it replaces is copied as it stands, then overwritten.
-    await $.fs.write(`${dir}/.versions/${cur.id}/v${cur.version}.md`, await $.fs.read(`${dir}/${cur.id}.md`))
+    await $.fs.write(`${dir}/.versions/${cur.id}/v${cur.version}.md`, text)
     meta = { ...cur, ...stamp, title: args.title, kind: args.kind ?? cur.kind, version: cur.version + 1 }
   } else {
     const id = newId(args.title, now, new Set(items.map(m => m.id)))
     meta = { id, title: args.title, kind: args.kind ?? DEFAULT_KIND, version: 1, created: iso, ...stamp }
   }
   await $.fs.write(`${dir}/${meta.id}.md`, renderFile(meta, args.body))
+  cache.delete(`${dir}/${meta.id}.md`)
   return meta
 }
 
