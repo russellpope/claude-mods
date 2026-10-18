@@ -372,14 +372,104 @@ describe('transcript reads', () => {
     await ui.unmount()
   })
 
-  test('summary: the mood word and live counts, then cost, tokens and labelled elapsed time', async ($, on) => {
-    worker(on, { text: `${usageLine('m1', 720_000)}\n` })
+  test('summary: the mood word and live counts, then cost and labelled elapsed time, then the tokens and their split', async ($, on) => {
+    const cached = JSON.stringify({
+      type: 'assistant',
+      isSidechain: false,
+      message: { id: 'm1', model: 'claude-sonnet-5-5', usage: { input_tokens: 20_000, cache_read_input_tokens: 700_000, output_tokens: 1_500 } },
+    })
+    worker(on, { text: `${cached}\n` })
     await watchPane(on).open($)
     const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS(120) })
 
     expect(await ui.find({ type: 'Text', text: /^asleep · 1 idle$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /tok · .* elapsed$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^≈\$[\d.]+ · [\d:]+ elapsed$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^722k tok · 97% cache reads · 2k output$/ })).toBeDefined()
     await ui.unmount()
+  })
+})
+
+describe('codex rollouts', () => {
+  const EDGE = JSON.stringify({ v: 1, parent: 'w9:p1', parentSession: '', child: 'wX:p3', name: 'demo-impl', via: 'claude-mod', at: NOW - 1000 })
+  const PATH = '/home/me/.codex-alt/sessions/2026/10/17/rollout-2026-10-17T00-09-55-01a148b2-1db3.jsonl'
+  const ROLLOUT = [
+    JSON.stringify({ type: 'session_meta', payload: { id: '01a148b2-1db3' } }),
+    JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-sol', effort: 'high' } }),
+    JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { input_tokens: 2_994_739, cached_input_tokens: 2_900_864, output_tokens: 11_410, total_tokens: 3_006_149 },
+          last_token_usage: { total_tokens: 100_705 },
+          model_context_window: 828_400,
+        },
+      },
+    }),
+    '',
+  ].join('\n')
+
+  // Answers herdr with one codex worker, the rollout search with PATH, and `tail -c +N | head -c M` over ROLLOUT at PATH.
+  const codexWorker = (on: Parameters<TestBody>[1], session: string, searches: string[][]) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-wX_p3.json`, kind: 'file' as const, size: EDGE.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async () => ({ value: EDGE }))
+    on('fs.exists', async () => ({ value: false }))
+    on('process.run', async (_$, e) => {
+      if (e.argv[0] === 'herdr') return ok(list(ROOT, { ...agent('wX:p3', 'demo-impl', session), agent: 'codex', agent_status: 'working' }))
+      if (e.argv[0] !== '/bin/sh') return failed
+      if (e.argv[2]?.includes('find')) {
+        searches.push(e.argv.slice(3))
+        return ok(`${PATH}\n`)
+      }
+      if (e.argv[5] !== PATH) return failed
+      const bytes = new TextEncoder().encode(ROLLOUT)
+      const start = Number(e.argv[4]) - 1
+      return ok(new TextDecoder().decode(bytes.slice(start, start + Number(e.argv[6]))))
+    })
+  }
+
+  test('a codex worker gets model, effort, context against its own window, and tokens from its rollout; no cost', async ($, on) => {
+    const searches: string[][] = []
+    codexWorker(on, '01a148b2-1db3', searches)
+
+    const snap = await watchPane(on).open($)
+
+    expect(searches).toEqual([['sh', '/home/me', '01a148b2-1db3']])
+    expect(snap.nodes[0]?.usage).toEqual({
+      model: 'gpt-6.1-sol',
+      effort: 'high',
+      contextTokens: 100_705,
+      window: 828_400,
+      tokens: 3_006_149,
+      cachedTokens: 2_900_864,
+      outputTokens: 11_410,
+      costUsd: null,
+    })
+  })
+
+  test('the codex row: model and effort, meter and percent, a blank cost', async ($, on) => {
+    codexWorker(on, '01a148b2-1db3', [])
+    await watchPane(on).open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: false, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+
+    expect(await ui.find({ type: 'Text', text: /^gpt-6\.1-sol·high$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^12%$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^≈\$/ })).toBeDefined() // the header's total
+    expect(await ui.find({ type: 'Text', text: /^≈\$[\d.]+$/ })).toBeUndefined() // no row cost
+    await ui.unmount()
+  })
+
+  test('a session id that is not a plain id is never searched for', async ($, on) => {
+    const searches: string[][] = []
+    codexWorker(on, '*', searches)
+
+    const snap = await watchPane(on).open($)
+
+    expect(searches).toEqual([])
+    expect(snap.nodes[0]?.usage).toBeNull()
   })
 })
 

@@ -31,8 +31,16 @@ export type Usage = {
   model: string
   effort: string
   contextTokens: number
+  /** The context window the harness reports (codex does); 0 means look it up by model. */
+  window: number
+  /** Every call's input, cache reads included, plus its output. */
   tokens: number
-  costUsd: number
+  /** The part of `tokens` read back from the prompt cache. */
+  cachedTokens: number
+  /** The part of `tokens` the model wrote. */
+  outputTokens: number
+  /** null where no price is known: codex bills against a ChatGPT plan. */
+  costUsd: number | null
 }
 
 export type TreeNode = {

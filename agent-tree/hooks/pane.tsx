@@ -2,7 +2,7 @@ import type { HerdrAgent, InProcRun, Panel, Snapshot, TreeNode } from '../types'
 import { CRAB_ROWS, CRAB_WIDTH, MINI, ROLE_COLOR, halfBlock, moodOf, moodWord, spriteFor } from './crab'
 import { costumeOfRole, crabSvg, heroSvg } from './svg-crab'
 import { partition } from './tree'
-import { fmtCost, fmtTime, fmtTokens, modelName } from './usage'
+import { fmtCost, fmtTime, modelName } from './usage'
 import {
   STATUS_COLOR,
   STATUS_GLYPH,
@@ -17,6 +17,7 @@ import {
   modelLabel,
   rowColumns,
   spanText,
+  tokenLine,
   totals,
   treePrefix,
 } from './view'
@@ -98,7 +99,8 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   const summary = (
     <Box key="summary" flexDirection="column">
       <Text bold wrap="truncate-end">{`${moodWord(mood)} · ${countsLine(snap.nodes)}`}</Text>
-      <Text dimColor wrap="truncate-end">{`≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} tok · ${fmtTime(t.time)} elapsed`}</Text>
+      <Text dimColor wrap="truncate-end">{`≈${fmtCost(t.cost)} · ${fmtTime(t.time)} elapsed`}</Text>
+      <Text dimColor wrap="truncate-end">{tokenLine(t)}</Text>
       {batchLine}
       {snap.error ? <Text color="#D0453F">{snap.error}</Text> : null}
     </Box>

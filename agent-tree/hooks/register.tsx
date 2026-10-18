@@ -4,7 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
 import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
 import { WEEK_MS, edgeAt, edgeFileName, ledgerDir, makeEdge, parseEdge } from './ledger'
-import type { TreeNode } from '../types'
+import type { TreeNode, Usage } from '../types'
+import { addRollout, codexUsage } from './codex'
 import { completeRun, spawnRun, stepRun } from './inproc'
 import { drawPane } from './pane'
 import { TICKET_GREP_ARGV, batchCounts, batchStamp, parseTicketGrep, repoFromCommonDir, ticketFor } from './tickets'
@@ -98,17 +99,37 @@ async function resolveTranscript($: EngineInterface, home: string, cwd: string, 
   return r?.stdout.split('\n')[0]?.trim() || null
 }
 
-/** New transcript bytes for each live Claude node, read in whole-line chunks of at most CHUNK_BYTES. */
+// A codex session's rollout, in any codex home named ~/.codex* (workers also run with CODEX_HOME=~/.codex-alt).
+async function resolveRollout($: EngineInterface, home: string, session: string): Promise<string | null> {
+  if (!/^[A-Za-z0-9-]+$/.test(session)) return null
+  const r = await $.process
+    .run(['/bin/sh', '-c', 'find "$1"/.codex*/sessions -name "rollout-*-$2.jsonl" 2>/dev/null | head -n 1', 'sh', home, session], { timeoutMs: 5000 })
+    .catch(() => null)
+  return r?.stdout.split('\n')[0]?.trim() || null
+}
+
+// How each harness's usage file reads; usagePath finds the file.
+const READERS: Record<string, { add: (acc: UsageAcc, text: string) => UsageAcc; usage: (acc: UsageAcc) => Usage }> = {
+  claude: { add: addTranscript, usage: toUsage },
+  codex: { add: addRollout, usage: codexUsage },
+}
+
+async function usagePath($: EngineInterface, home: string, n: TreeNode): Promise<string | null> {
+  return n.harness === 'codex' ? resolveRollout($, home, n.session) : resolveTranscript($, home, n.cwd, n.session)
+}
+
+/** New transcript bytes for each live Claude or codex node, read in whole-line chunks of at most CHUNK_BYTES. */
 async function withUsage($: EngineInterface, home: string, nodes: TreeNode[]): Promise<TreeNode[]> {
   const out: TreeNode[] = []
   for (const n of nodes) {
-    if (n.harness !== 'claude' || !n.session || n.status === 'gone') {
+    const reader = READERS[n.harness]
+    if (!reader || !n.session || n.status === 'gone') {
       out.push(n)
       continue
     }
     let c = usageCache.get(n.session)
     if (!c) {
-      const path = await resolveTranscript($, home, n.cwd, n.session)
+      const path = await usagePath($, home, n)
       if (!path) {
         out.push(n)
         continue
@@ -123,11 +144,11 @@ async function withUsage($: EngineInterface, home: string, nodes: TreeNode[]): P
       if (!r || r.exitCode !== 0) break
       const read = consumeChunk(r.stdout, c.isSkipping)
       if (!read.bytes) break
-      c.acc = addTranscript(c.acc, read.text)
+      c.acc = reader.add(c.acc, read.text)
       c.offset += read.bytes
       c.isSkipping = read.isSkipping
     }
-    out.push({ ...n, usage: c.acc.model ? toUsage(c.acc) : n.usage })
+    out.push({ ...n, usage: c.acc.model ? reader.usage(c.acc) : n.usage })
   }
   return out
 }
