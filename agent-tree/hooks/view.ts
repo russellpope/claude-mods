@@ -21,14 +21,25 @@ export const groupAll = (agents: HerdrAgent[], repos: Record<string, string>): [
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
 }
 
-export type Totals = { cost: number; tokens: number; cached: number; output: number; time: number }
+export type Totals = { cost: number; tokens: number; cached: number; output: number; time: number; hasUnpriced: boolean }
 
 export const totals = (nodes: TreeNode[]): Totals => {
-  if (!nodes.length) return { cost: 0, tokens: 0, cached: 0, output: 0, time: 0 }
+  if (!nodes.length) return { cost: 0, tokens: 0, cached: 0, output: 0, time: 0, hasUnpriced: false }
   const sum = (f: (u: Usage) => number) => nodes.reduce((s, n) => s + (n.usage ? f(n.usage) : 0), 0)
   const time = Math.max(...nodes.map(n => n.lastSeen)) - Math.min(...nodes.map(n => n.startedAt))
-  return { cost: sum(u => u.costUsd ?? 0), tokens: sum(u => u.tokens), cached: sum(u => u.cachedTokens), output: sum(u => u.outputTokens), time }
+  return {
+    cost: sum(u => u.costUsd ?? 0),
+    tokens: sum(u => u.tokens),
+    cached: sum(u => u.cachedTokens),
+    output: sum(u => u.outputTokens),
+    time,
+    hasUnpriced: nodes.some(n => n.usage?.costUsd === null),
+  }
 }
+
+/** The estimate and elapsed time. Codex rows have no price, so beside them the estimate says it is Claude's alone. */
+export const costLine = (t: Pick<Totals, 'cost' | 'time' | 'hasUnpriced'>): string =>
+  `≈${fmtCost(t.cost)}${t.hasUnpriced ? ' Claude only' : ''} · ${fmtTime(t.time)} elapsed`
 
 /** The burn and its split. Rounded down, so a share short of all reads 99%, not 100%. */
 export const tokenLine = (t: Pick<Totals, 'tokens' | 'cached' | 'output'>): string =>

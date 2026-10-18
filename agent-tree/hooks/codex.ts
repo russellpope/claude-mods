@@ -2,7 +2,11 @@ import type { Usage } from '../types'
 import { toUsage } from './usage'
 import type { UsageAcc } from './usage'
 
-type Counts = { cached_input_tokens?: number; output_tokens?: number; total_tokens?: number }
+type Counts = { cached_input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number; total_tokens?: number }
+
+// Codex's own context bar leaves reasoning out of the context, and this baseline out of both the context
+// and the window. The row counts the same way, so it reads what the worker's pane reads.
+const BASELINE_TOKENS = 12_000
 
 type Line = {
   type?: string
@@ -38,8 +42,9 @@ export const addRollout = (acc: UsageAcc, text: string): UsageAcc => {
     next.tokens = info.total_token_usage.total_tokens || 0
     next.cachedTokens = info.total_token_usage.cached_input_tokens || 0
     next.outputTokens = info.total_token_usage.output_tokens || 0
-    next.contextTokens = info.last_token_usage?.total_tokens || 0
-    next.window = info.model_context_window || 0
+    const last = info.last_token_usage
+    next.contextTokens = Math.max(0, (last?.total_tokens || 0) - (last?.reasoning_output_tokens || 0) - BASELINE_TOKENS)
+    next.window = Math.max(0, (info.model_context_window || 0) - BASELINE_TOKENS)
   }
   return next
 }

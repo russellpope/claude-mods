@@ -441,8 +441,8 @@ describe('codex rollouts', () => {
     expect(snap.nodes[0]?.usage).toEqual({
       model: 'gpt-6.1-sol',
       effort: 'high',
-      contextTokens: 100_705,
-      window: 828_400,
+      contextTokens: 88_705,
+      window: 816_400,
       tokens: 3_006_149,
       cachedTokens: 2_900_864,
       outputTokens: 11_410,
@@ -450,14 +450,14 @@ describe('codex rollouts', () => {
     })
   })
 
-  test('the codex row: model and effort, meter and percent, a blank cost', async ($, on) => {
+  test("the codex row: model and effort, meter and codex's own percent, a blank cost; the header's estimate says Claude only", async ($, on) => {
     codexWorker(on, '01a148b2-1db3', [])
     await watchPane(on).open($)
     const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: false, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } })
 
     expect(await ui.find({ type: 'Text', text: /^gpt-6\.1-sol·high$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^12%$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^≈\$/ })).toBeDefined() // the header's total
+    expect(await ui.find({ type: 'Text', text: /^11%$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^≈\$0\.00 Claude only · [\d:]+ elapsed$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^≈\$[\d.]+$/ })).toBeUndefined() // no row cost
     await ui.unmount()
   })

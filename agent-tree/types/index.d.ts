@@ -30,8 +30,9 @@ export type HerdrAgent = {
 export type Usage = {
   model: string
   effort: string
+  /** The context as the harness's own meter counts it (codex: less reasoning and its baseline). */
   contextTokens: number
-  /** The context window the harness reports (codex does); 0 means look it up by model. */
+  /** The window the context percent is of, where the harness reports one (codex: less its baseline); 0 means look it up by model. */
   window: number
   /** Every call's input, cache reads included, plus its output. */
   tokens: number

@@ -7,6 +7,7 @@ import {
   STATUS_COLOR,
   STATUS_GLYPH,
   clip,
+  costLine,
   costText,
   countsLine,
   ctxPercent,
@@ -99,7 +100,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   const summary = (
     <Box key="summary" flexDirection="column">
       <Text bold wrap="truncate-end">{`${moodWord(mood)} · ${countsLine(snap.nodes)}`}</Text>
-      <Text dimColor wrap="truncate-end">{`≈${fmtCost(t.cost)} · ${fmtTime(t.time)} elapsed`}</Text>
+      <Text dimColor wrap="truncate-end">{costLine(t)}</Text>
       <Text dimColor wrap="truncate-end">{tokenLine(t)}</Text>
       {batchLine}
       {snap.error ? <Text color="#D0453F">{snap.error}</Text> : null}

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { HerdrAgent, TreeNode, Usage } from '../types'
-import { clip, costText, countsLine, ctxPercent, dots, groupAll, isCompact, meterColor, modelLabel, rowColumns, spanText, statusLine, tokenLine, totals, treePrefix } from './view'
+import { clip, costLine, costText, countsLine, ctxPercent, dots, groupAll, isCompact, meterColor, modelLabel, rowColumns, spanText, statusLine, tokenLine, totals, treePrefix } from './view'
 
 const node = (over: Partial<TreeNode>): TreeNode => ({
   pane: 'p', parent: 'R', depth: 0, isLast: false, name: 'n', harness: 'claude', role: 'other', status: 'working',
@@ -41,8 +41,15 @@ describe('view', () => {
       cached: 220,
       output: 10,
       time: 80,
+      hasUnpriced: true,
     })
-    expect(totals([])).toEqual({ cost: 0, tokens: 0, cached: 0, output: 0, time: 0 })
+    expect(totals([node({ usage: u })]).hasUnpriced).toBe(false)
+    expect(totals([])).toEqual({ cost: 0, tokens: 0, cached: 0, output: 0, time: 0, hasUnpriced: false })
+  })
+
+  test("cost line: the estimate and elapsed time; with a codex row in the sum it says the estimate is Claude's alone", () => {
+    expect(costLine({ cost: 3, time: 80_000, hasUnpriced: false })).toBe('≈$3.00 · 1:20 elapsed')
+    expect(costLine({ cost: 955.7, time: 9_418_000, hasUnpriced: true })).toBe('≈$955.7 Claude only · 2:36:58 elapsed')
   })
 
   test('token line: the burn, the share read back from the cache (rounded down, never a false 100%), and the output', () => {
