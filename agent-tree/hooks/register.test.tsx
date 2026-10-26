@@ -107,11 +107,15 @@ describe('Bash spawn hook', () => {
 // driven the way a person drives it, by /agent-tree, which opens the pane and awaits it.
 // Registers the pane's test hooks once (the kit wants every test hook before the first $ call);
 // open() then runs /agent-tree and returns the snapshot the first refresh wrote.
-const watchPane = (on: Parameters<TestBody>[1]) => {
+// `statuses` collects each status line the mod sets.
+const watchPane = (on: Parameters<TestBody>[1], statuses: (string | undefined)[] = []) => {
   let last: Snapshot | undefined
   on('ui.panes', async () => ({ value: [] }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
-  on('ui.status', async () => ({ value: undefined }))
+  on('ui.status', async (_$, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
   // Test hooks sit beneath the plugin: this one sees each snapshot write, then lets the kit store it.
   on('state.set', async (_$, e, next) => {
     if (e.plugin === 'agent-tree' && e.key === 'snapshot') last = e.value as Snapshot
@@ -520,5 +524,98 @@ describe('idle cost', () => {
     await clock.advance(10_000)
 
     expect(panesCalls).toBe(0)
+  })
+})
+
+describe('dings', () => {
+  // This session (w9:p1) spawned lead wL:p1, which spawned workers wL:p2 and wL:p3. wB:p1 is a session nobody spawned.
+  const EDGES = [
+    { v: 1, parent: 'w9:p1', parentSession: '', child: 'wL:p1', name: 'lead-l', via: 'claude-mod', at: NOW - 5000 },
+    { v: 1, parent: 'wL:p1', parentSession: '', child: 'wL:p2', name: 'l-impl', via: 'claude-mod', at: NOW - 4000 },
+    { v: 1, parent: 'wL:p1', parentSession: '', child: 'wL:p3', name: 'l-review', via: 'claude-mod', at: NOW - 3000 },
+  ]
+  const fileOf = (e: (typeof EDGES)[number]) => `${e.at}-${e.child.replace(':', '_')}.json`
+  const ledger = (on: Parameters<TestBody>[1]) => {
+    on('fs.list', async () => ({ value: EDGES.map(e => ({ name: fileOf(e), kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }))
+    on('fs.read', async (_$, e) => ({ value: JSON.stringify(EDGES.find(x => e.path.endsWith(fileOf(x)))) }))
+    on('fs.exists', async () => ({ value: false }))
+  }
+  const is = (a: ReturnType<typeof agent>, status: string) => ({ ...a, agent_status: status })
+  const LEAD = agent('wL:p1', 'lead-l', 'sL')
+  const IMPL = agent('wL:p2', 'l-impl', 'sI')
+  const REVIEW = agent('wL:p3', 'l-review', 'sR')
+  const OTHER = agent('wB:p1', 'other-session', 'sB')
+  const PROPS = { title: 'Agent tree', isFocused: true, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
+
+  test('two polls: the Dings section, the ! on a tree row and the status line show what needs you; pressing a ding focuses its pane and closes it', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    let now = NOW
+    on('clock.now', async () => ({ value: now }))
+    ledger(on)
+    let agents = [ROOT, is(LEAD, 'working'), is(IMPL, 'working'), is(REVIEW, 'working'), is(OTHER, 'working')]
+    const focused: string[] = []
+    on('process.run', async (_$, e) => {
+      if (e.argv[0] !== 'herdr') return failed
+      if (e.argv[2] === 'focus') {
+        focused.push(e.argv[3] ?? '')
+        return ok('{}')
+      }
+      return ok(list(...agents))
+    })
+    const statuses: (string | undefined)[] = []
+    const pane = watchPane(on, statuses)
+
+    await pane.open($)
+    now = NOW + 2000
+    // The lead's turn ends in the tab you are on (no ding); its implementer finishes, its reviewer asks, the other session finishes.
+    agents = [ROOT, is(LEAD, 'idle'), is(IMPL, 'done'), is(REVIEW, 'blocked'), is(OTHER, 'done')]
+    await pane.open($)
+
+    expect(statuses.at(-1)).toBe('tree 0● 1! · 2 need you')
+    const desktop = await $.ui.mount({ plugin: 'agent-tree', surface: 'desktop', component: 'Pane', requestId: 'agent-tree', props: PROPS })
+    expect((await desktop.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 3 · 2 need you')
+    expect(await desktop.find({ type: 'Button', key: `fd-wL:p3-${NOW + 2000}` })).toBeDefined()
+    await desktop.unmount()
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
+    expect((await ui.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 3 · 2 need you')
+    const row = async (pane: string) => (await ui.find({ type: 'Box', key: `d-${pane}-${NOW + 2000}` }))?.text
+    expect(await row('wB:p1')).toMatch(/^!\s*0s\s*other-session\s*finished/)
+    expect(await row('wL:p3')).toMatch(/^!\s*0s\s*l-review\s*asking/)
+    expect(await row('wL:p2')).toMatch(/^\s*0s\s*l-impl\s*finished\s*lead-l still running$/)
+    // In the tree, the reviewer that asked carries the mark; its sibling does not.
+    expect((await ui.find({ type: 'Box', key: `m-wL:p3-${NOW - 3000}` }))?.text).toBe('!')
+    expect((await ui.find({ type: 'Box', key: `m-wL:p2-${NOW - 4000}` }))?.text ?? '').toBe('')
+
+    await ui.press({ key: `fd-wB:p1-${NOW + 2000}` })
+
+    expect(focused).toEqual(['wB:p1'])
+    expect(statuses.at(-1)).toBe('tree 0● 1! · 1 needs you')
+    expect((await ui.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 3 · 1 needs you')
+    expect(await row('wB:p1')).toMatch(/^\s*0s\s*other-session/)
+    await ui.unmount()
+  })
+
+  test('after herdr stops answering, the first good list dings nothing: the turns in between were never seen', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
+    mock.store(on)
+    let now = NOW
+    on('clock.now', async () => ({ value: now }))
+    ledger(on)
+    let reply = ok(list(ROOT, is(OTHER, 'working')))
+    on('process.run', async (_$, e) => (e.argv[0] === 'herdr' ? reply : failed))
+    const pane = watchPane(on)
+
+    await pane.open($)
+    now = NOW + 2000
+    reply = failed
+    await pane.open($)
+    now = NOW + 4000
+    reply = ok(list(ROOT, is(OTHER, 'done')))
+    await pane.open($)
+
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
+    expect(await ui.find({ type: 'Button', key: 's-dings' })).toBeUndefined()
+    await ui.unmount()
   })
 })

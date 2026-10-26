@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { HerdrAgent, TreeNode, Usage } from '../types'
-import { clip, costLine, costText, countsLine, ctxPercent, dots, groupAll, isCompact, meterColor, modelLabel, rowColumns, spanText, statusLine, tokenLine, totals, treePrefix } from './view'
+import { ageText, clip, costLine, costText, countsLine, ctxPercent, dots, groupAll, isCompact, meterColor, modelLabel, rowColumns, spanText, statusLine, tokenLine, totals, treePrefix } from './view'
 
 const node = (over: Partial<TreeNode>): TreeNode => ({
   pane: 'p', parent: 'R', depth: 0, isLast: false, name: 'n', harness: 'claude', role: 'other', status: 'working',
@@ -69,6 +69,23 @@ describe('view', () => {
     expect(statusLine([node({ status: 'working' }), node({ status: 'working' }), node({ status: 'blocked' }), node({ status: 'done' })])).toBe('tree 2● 1!')
     expect(statusLine([node({ status: 'idle' })])).toBe('tree 0●')
     expect(statusLine([node({ status: 'gone' }), node({ status: 'done' })])).toBeUndefined()
+  })
+
+  test('status line: dings that need you are counted after the tree, and alone when nothing is live', () => {
+    expect(statusLine([node({ status: 'working' }), node({ status: 'blocked' })], 2)).toBe('tree 1● 1! · 2 need you')
+    expect(statusLine([node({ status: 'done' })], 1)).toBe('1 needs you')
+    expect(statusLine([node({ status: 'working' })], 0)).toBe('tree 1●')
+  })
+
+  test("a ding's age: seconds, then whole minutes, hours, days", () => {
+    expect(ageText(0)).toBe('0s')
+    expect(ageText(59_999)).toBe('59s')
+    expect(ageText(60_000)).toBe('1m')
+    expect(ageText(3_599_999)).toBe('59m')
+    expect(ageText(3_600_000)).toBe('1h')
+    expect(ageText(86_400_000 * 2 + 5)).toBe('2d')
+    // A clock that stepped back is not a negative age.
+    expect(ageText(-5000)).toBe('0s')
   })
 
   test('context percent', () => {

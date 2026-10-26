@@ -85,6 +85,25 @@ export type Panel = {
   isFinishedOpen: boolean
   isInProcessOpen: boolean
   isAutoOpened: boolean
+  /** Absent in a panel kept from before the Dings section: open. */
+  isDingsOpen?: boolean
+}
+
+/** A change herdr plays a sound for: a turn ending in a background tab, or an agent asking for input. */
+export type Ding = {
+  at: number
+  pane: string
+  /** The herdr terminal: a new occupant of the pane is a new agent. */
+  terminal: string
+  name: string
+  kind: 'finished' | 'asking'
+  /** The pane's title as it read then (its DONE: or BLOCKED: line), else the terminal's. */
+  title: string
+  /** Why a ding does not need you; empty when it does. */
+  why: string
+  needsYou: boolean
+  /** Needs you and not answered yet: its row not pressed, its agent not working again. */
+  isOpen: boolean
 }
 
 export type InProcRun = {
@@ -109,6 +128,7 @@ declare module 'claude-code' {
       frame: number
       inproc: InProcRun[]
       edgeCount: number
+      dings: Ding[]
     }
   }
 }

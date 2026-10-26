@@ -46,12 +46,24 @@ export const costLine = (t: Pick<Totals, 'cost' | 'time' | 'hasUnpriced'>): stri
 export const tokenLine = (t: Pick<Totals, 'tokens' | 'cached' | 'output'>): string =>
   t.tokens ? `${fmtTokens(t.tokens)} tok · ${Math.floor((t.cached / t.tokens) * 100)}% cache reads · ${fmtTokens(t.output)} output` : '0 tok'
 
-export const statusLine = (nodes: TreeNode[]): string | undefined => {
+export const needText = (n: number): string => `${n} need${n === 1 ? 's' : ''} you`
+
+export const statusLine = (nodes: TreeNode[], needYou = 0): string | undefined => {
   const live = nodes.filter(n => isLive(n.status))
-  if (!live.length) return undefined
+  const need = needYou ? needText(needYou) : ''
+  if (!live.length) return need || undefined
   const working = live.filter(n => n.status === 'working').length
   const blocked = live.filter(n => n.status === 'blocked').length
-  return `tree ${working}●${blocked ? ` ${blocked}!` : ''}`
+  return `tree ${working}●${blocked ? ` ${blocked}!` : ''}${need ? ` · ${need}` : ''}`
+}
+
+/** How long ago a ding was, in its largest whole unit. */
+export const ageText = (ms: number): string => {
+  const s = Math.floor(Math.max(0, ms) / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 86_400) return `${Math.floor(s / 3600)}h`
+  return `${Math.floor(s / 86_400)}d`
 }
 
 export const ctxPercent = (u: Usage | null): number => (u && u.model ? Math.min(100, Math.round((u.contextTokens / (u.window || windowOf(u.model))) * 100)) : 0)

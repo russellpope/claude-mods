@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
+import type { Ding, Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
+import { addDings, findDings, markSeen, needYou, parentsOf, settleDings } from './dings'
 import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
 import { WEEK_MS, edgeAt, edgeFileName, ledgerDir, makeEdge, parseEdge } from './ledger'
 import type { TreeNode, Usage } from '../types'
@@ -27,10 +28,12 @@ export const panel = atom({ plugin: 'agent-tree', key: 'panel' } as const, {
   isFinishedOpen: false,
   isInProcessOpen: false,
   isAutoOpened: false,
+  isDingsOpen: true,
 } as Panel)
 export const frame = atom({ plugin: 'agent-tree', key: 'frame' } as const, 0)
 export const inproc = atom({ plugin: 'agent-tree', key: 'inproc' } as const, [] as InProcRun[])
 export const edgeCount = atom({ plugin: 'agent-tree', key: 'edgeCount' } as const, 0)
+export const dings = atom({ plugin: 'agent-tree', key: 'dings' } as const, [] as Ding[])
 
 // Module caches: a reload starts them over, which only costs a re-read.
 // Only edges that parsed: a sibling session's file caught mid-write is read again next time.
@@ -188,11 +191,19 @@ async function withTickets($: EngineInterface, nodes: TreeNode[], repos: Record<
 let running: Promise<void> | null = null
 
 // A press always answers: herdr jumps to the pane, or a toast says why it could not.
-async function focusPane($: EngineInterface, pane: string) {
+async function focusPane($: EngineInterface, pane: string): Promise<boolean> {
   const r = await $.process.run(['herdr', 'agent', 'focus', pane], { timeoutMs: 5000 }).catch((err: unknown) => String(err))
-  if (typeof r !== 'string' && r.exitCode === 0) return
+  if (typeof r !== 'string' && r.exitCode === 0) return true
   const reason = typeof r === 'string' ? r : herdrError(r.stdout) || r.stderr.trim() || `exit ${r.exitCode}`
   $.ui.toast(`agent-tree: could not focus ${pane}: ${reason}`)
+  return false
+}
+
+// A row press puts the pane in front of you, which answers its open dings.
+async function focusRow($: EngineInterface, pane: string) {
+  if (!(await focusPane($, pane))) return
+  const list = await update($, dings, l => markSeen(l, pane))
+  $.ui.status(statusLine((await read($, snapshot)).nodes, needYou(list)))
 }
 
 export function refresh($: EngineInterface, full: boolean): Promise<void> {
@@ -223,6 +234,9 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
     const latest = ((await $.store.get('bindings').catch(() => undefined)) ?? {}) as Record<string, string>
     await $.store.set('bindings', { ...built.bindings, ...latest }).catch(() => undefined)
   }
+  // A list from before an error is stale: the turns since then were never seen.
+  const found = findDings({ prev: prev.all, prevAt: prev.error ? 0 : prev.at, next: agents, at, parents: parentsOf(edges, built.nodes) })
+  const log = await update($, dings, l => settleDings(addDings(l, found), agents))
   let nodes = built.nodes
   let repos = prev.repos
   let batch = prev.batch
@@ -232,7 +246,7 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
     ;({ nodes, batch } = await withTickets($, nodes, repos, at))
   }
   await update($, snapshot, () => ({ at, root, nodes, all: agents, repos, batch, error: '' }))
-  $.ui.status(statusLine(nodes))
+  $.ui.status(statusLine(nodes, needYou(log)))
 }
 
 // True from the moment this session opens the pane until ui.panes says it is gone: a session
@@ -324,11 +338,12 @@ export const register: Register = (on, options) => {
         panel: await read($, panel),
         frame: await read($, frame),
         inproc: await read($, inproc),
+        dings: await read($, dings),
         cols: e.props.bodyColumns || 80,
         surface: e.surface,
       },
       {
-        focus: pane => void focusPane($, pane),
+        focus: pane => void focusRow($, pane),
         setPanel: fn => void update($, panel, fn),
       },
     )
