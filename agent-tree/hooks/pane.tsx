@@ -269,8 +269,13 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         {openDings.length ? <Button key="ack-all" label="ack all" plain dimColor onPress={() => act.ack()} /> : null}
       </Box>
       {isDingsOpen ? openDings.map(d => dingRow(d, 'd')) : null}
-      {isDingsOpen && acked.length ? section('s-acked', `Acknowledged · ${acked.length}`, isAckedOpen, p => ({ ...p, isAckedOpen: !(p.isAckedOpen ?? false) })) : null}
-      {isDingsOpen && isAckedOpen ? acked.map(d => dingRow(d, 'k')) : null}
+      {isDingsOpen && acked.length ? (
+        // Indented: it belongs to Dings.
+        <Box key="acked" flexDirection="column" paddingLeft={2}>
+          {section('s-acked', `Acknowledged · ${acked.length}`, isAckedOpen, p => ({ ...p, isAckedOpen: !(p.isAckedOpen ?? false) }))}
+          {isAckedOpen ? acked.map(d => dingRow(d, 'k')) : null}
+        </Box>
+      ) : null}
     </Box>
   ) : null
 

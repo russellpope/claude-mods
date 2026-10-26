@@ -602,6 +602,10 @@ describe('dings', () => {
 
     expect(await label('s-acked')).toBe('▾ Acknowledged · 1')
     expect(await text(`k-wL:p2-${T}`)).toMatch(/^\s*0s\s*l-impl\s*finished\s*lead-l still running$/)
+    // Acknowledged, header and rows, sits indented under Dings.
+    const acked = await ui.find({ type: 'Box', key: 'acked' })
+    expect(acked?.props.paddingLeft).toBe(2)
+    expect(acked?.text).toMatch(/Acknowledged · 1.*l-impl/)
     expect(await label(`ack-wL:p2-${T}`)).toBeUndefined()
     await ui.unmount()
     const desktop = await $.ui.mount({ plugin: 'agent-tree', surface: 'desktop', component: 'Pane', requestId: 'agent-tree', props: PROPS })
