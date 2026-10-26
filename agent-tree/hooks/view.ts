@@ -30,8 +30,9 @@ export const totals = (nodes: TreeNode[]): Totals => {
   return {
     cost: sum(u => u.costUsd ?? 0),
     tokens: sum(u => u.tokens),
-    cached: sum(u => u.cachedTokens),
-    output: sum(u => u.outputTokens),
+    // Usage from before the split was added has neither; state outlives a reload, so it can still be here.
+    cached: sum(u => u.cachedTokens ?? 0),
+    output: sum(u => u.outputTokens ?? 0),
     time,
     hasUnpriced: nodes.some(n => n.usage?.costUsd === null),
   }

@@ -47,6 +47,13 @@ describe('view', () => {
     expect(totals([])).toEqual({ cost: 0, tokens: 0, cached: 0, output: 0, time: 0, hasUnpriced: false })
   })
 
+  test('totals: a row whose usage predates the split (kept in state across a reload) adds its tokens and nothing to the split', () => {
+    const { cachedTokens: _c, outputTokens: _o, ...old } = use({ tokens: 100, costUsd: 1.5 })
+    const t = totals([node({ usage: old as Usage }), node({ usage: use({ tokens: 50, cachedTokens: 40, outputTokens: 2 }) })])
+    expect(t).toMatchObject({ tokens: 150, cached: 40, output: 2 })
+    expect(tokenLine(t)).toBe('150 tok · 26% cache reads · 2 output')
+  })
+
   test("cost line: the estimate and elapsed time; with a codex row in the sum it says the estimate is Claude's alone", () => {
     expect(costLine({ cost: 3, time: 80_000, hasUnpriced: false })).toBe('≈$3.00 · 1:20 elapsed')
     expect(costLine({ cost: 955.7, time: 9_418_000, hasUnpriced: true })).toBe('≈$955.7 Claude only · 2:36:58 elapsed')
