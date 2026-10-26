@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { HerdrAgent, TreeNode, Usage } from '../types'
-import { ageText, clip, costLine, costText, countsLine, ctxPercent, dots, groupAll, isCompact, meterColor, modelLabel, rowColumns, spanText, statusLine, tokenLine, totals, treePrefix } from './view'
+import { ageText, clip, costLine, costText, countsLine, ctxPercent, dots, groupAll, isCompact, meterColor, modelLabel, padName, rowColumns, spanText, statusLine, tokenLine, totals, treePrefix } from './view'
 
 const node = (over: Partial<TreeNode>): TreeNode => ({
   pane: 'p', parent: 'R', depth: 0, isLast: false, name: 'n', harness: 'claude', role: 'other', status: 'working',
@@ -140,6 +140,15 @@ describe('row text', () => {
   test('clip: long names end in an ellipsis at the width', () => {
     expect(clip('kintsugi-nxom-final-reviewer', 12)).toBe('kintsugi-nx…')
     expect(clip('short', 12)).toBe('short')
+  })
+
+  test('padName: clipped at the room there is, then padded with spaces so the whole cell is pressable', () => {
+    expect(padName('1', 12)).toBe('1           ')
+    expect(padName('kintsugi-nxom-final-reviewer', 12)).toBe('kintsugi-nx…')
+    // Room for 30, padded to 12: a short name still gets a 12-wide target.
+    expect(padName('abc', 30, 12)).toBe('abc         ')
+    // Less room than the minimum: the room wins.
+    expect(padName('abc', 8, 12)).toBe('abc     ')
   })
 
   test('columns: widths from the widest row, tree prefix included in the name column, capped', () => {

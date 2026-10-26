@@ -99,6 +99,9 @@ export const countsLine = (nodes: TreeNode[]): string => {
 
 export const clip = (text: string, width: number): string => (text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`)
 
+/** Clipped to `max`, then padded with spaces to `min` (or `max`): a Button is pressable only where its label is drawn. */
+export const padName = (text: string, max: number, min = max): string => clip(text, max).padEnd(Math.min(min, max))
+
 export const costText = (u: Usage | null): string => (u && u.costUsd !== null ? `≈${fmtCost(u.costUsd)}` : '')
 
 /** Column widths so rows line up: the name column holds the tree prefix too, capped at `maxName`. */

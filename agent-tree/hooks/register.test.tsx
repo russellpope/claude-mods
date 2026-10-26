@@ -643,6 +643,21 @@ describe('dings', () => {
     await ui.unmount()
   })
 
+  test('on the terminal a name fills its cell, at least 12 wide, so a short one is not a one-character target; the desktop draws names as they are', async ($, on) => {
+    const { ui, label } = await twoPolls($, on)
+
+    expect(await label(`fd-wB:p1-${T}`)).toBe('mods        ')
+    expect(await label(`f-wL:p1-${NOW - 5000}`)).toBe('lead-l      ')
+    // A worker's cell is the column less its tree prefix ('├ ').
+    expect(await label(`f-wL:p3-${NOW - 3000}`)).toBe('l-review  ')
+    await ui.press({ key: 'm-all' })
+    expect(await label('fa-wB:p1')).toBe('wB:p1       ')
+    await ui.unmount()
+    const desktop = await $.ui.mount({ plugin: 'agent-tree', surface: 'desktop', component: 'Pane', requestId: 'agent-tree', props: PROPS })
+    expect((await desktop.find({ type: 'Button', key: `fd-wB:p1-${T}` }))?.props.label).toBe('mods')
+    await desktop.unmount()
+  })
+
   test('after herdr stops answering, the first good list dings nothing: the turns in between were never seen', async ($, on) => {
     mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
     mock.store(on)

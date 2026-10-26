@@ -19,6 +19,7 @@ import {
   meterColor,
   modelLabel,
   needText,
+  padName,
   rowColumns,
   spanText,
   tokenLine,
@@ -35,6 +36,8 @@ export type PaneActions = { focus: (pane: string) => void; ack: (pane?: string) 
 type UI = any
 
 const NAME_MAX = 32
+// The narrowest a name's cell gets, so a short name is not a one-character target.
+const NAME_MIN = 12
 const METER_DOTS = 10
 const TIME_WIDTH = 8
 const MARK_COLOR = '#D0453F'
@@ -54,6 +57,9 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   // Fixed column widths line the rows up on the terminal; other surfaces lay them out themselves.
   const fixed = (width: number) => (m.surface === 'terminal' ? { width, flexShrink: 0 } : {})
   const dim = (isOn: boolean) => (isOn ? {} : { dimColor: true })
+  // On the terminal a name fills its cell; other surfaces draw their own buttons.
+  const nameText = (text: string, max: number, min = max) => (m.surface === 'terminal' ? padName(text, max, min) : clip(text, max))
+  const nameCol = Math.max(NAME_MIN, cols.name)
 
   const modeToggle = (
     <Box key="modes" flexDirection="row" gap={2}>
@@ -114,8 +120,8 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   )
 
   // The name is the row's button in both layouts: pressing it focuses that agent's herdr pane.
-  const nameButton = (n: TreeNode, width: number) => (
-    <Button key={`f-${n.pane}-${n.startedAt}`} label={clip(n.name, Math.max(4, width))} plain onPress={() => act.focus(n.pane)} />
+  const nameButton = (n: TreeNode, width: number, min = width) => (
+    <Button key={`f-${n.pane}-${n.startedAt}`} label={nameText(n.name, Math.max(4, width), min)} plain onPress={() => act.focus(n.pane)} />
   )
 
   const meter = (n: TreeNode) => {
@@ -139,7 +145,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         <Box key={`${n.pane}-${n.startedAt}`} flexDirection="row" gap={1}>
           <Text color={STATUS_COLOR[n.status]}>{STATUS_GLYPH[n.status]}</Text>
           {marked.has(n.pane) ? <Text color={MARK_COLOR}>!</Text> : null}
-          {nameButton(n, m.cols - 8)}
+          {nameButton(n, m.cols - 8, NAME_MIN)}
           {n.usage ? <Text color={meterColor(ctxPercent(n.usage))}>{`${ctxPercent(n.usage)}%`}</Text> : null}
         </Box>
       )
@@ -147,7 +153,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     const note = [n.ticket, n.status === 'blocked' || n.status === 'done' ? n.title : ''].filter(Boolean).join(' ')
     return (
       <Box key={`${n.pane}-${n.startedAt}`} flexDirection="row" gap={1}>
-        <Box key="name" flexDirection="row" {...fixed(cols.name + 5)}>
+        <Box key="name" flexDirection="row" {...fixed(nameCol + 5)}>
           {prefix ? <Text dimColor>{prefix}</Text> : null}
           <Text color={STATUS_COLOR[n.status]}>{`${STATUS_GLYPH[n.status]} `}</Text>
           {Svg ? (
@@ -155,7 +161,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
           ) : (
             <Text color={ROLE_COLOR[n.role]}>{`${MINI} `}</Text>
           )}
-          {nameButton(n, cols.name - prefix.length)}
+          {nameButton(n, nameCol - prefix.length)}
         </Box>
         {marked.size ? (
           <Box key={`m-${n.pane}-${n.startedAt}`} {...fixed(1)}>
@@ -194,13 +200,13 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     )
   }
 
-  const allName = Math.min(NAME_MAX, snap.all.reduce((w, a) => Math.max(w, (a.name || a.pane).length), 0))
+  const allName = Math.max(NAME_MIN, Math.min(NAME_MAX, snap.all.reduce((w, a) => Math.max(w, (a.name || a.pane).length), 0)))
   const allHarness = snap.all.reduce((w, a) => Math.max(w, a.harness.length), 0)
   const allRow = (a: HerdrAgent) => (
     <Box key={`all-${a.pane}`} flexDirection="row" gap={1}>
       <Text>{a.status === 'working' ? '●' : a.status === 'blocked' ? '!' : a.status === 'done' ? '✓' : '◌'}</Text>
       <Box key="name" {...(compact ? {} : fixed(allName))}>
-        <Button key={`fa-${a.pane}`} label={clip(a.name || a.pane, compact ? Math.max(4, m.cols - 4) : allName)} plain onPress={() => act.focus(a.pane)} />
+        <Button key={`fa-${a.pane}`} label={compact ? nameText(a.name || a.pane, Math.max(4, m.cols - 4), NAME_MIN) : nameText(a.name || a.pane, allName)} plain onPress={() => act.focus(a.pane)} />
       </Box>
       {compact ? null : (
         <Box key="harness" {...fixed(allHarness)}>
@@ -224,7 +230,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   const newest = [...m.dings].reverse()
   const openDings = newest.filter(d => d.isOpen)
   const acked = newest.filter(d => !d.isOpen).slice(0, KEEP_ACKED)
-  const dingName = Math.min(NAME_MAX, [...openDings, ...acked].reduce((w, d) => Math.max(w, d.name.length), 0))
+  const dingName = Math.max(NAME_MIN, Math.min(NAME_MAX, [...openDings, ...acked].reduce((w, d) => Math.max(w, d.name.length), 0)))
   // `k`: d for a ding that needs you, k for an acknowledged one.
   const dingRow = (d: Ding, k: 'd' | 'k') => {
     const key = `${d.pane}-${d.at}`
@@ -238,7 +244,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
           <Text dimColor>{ageText(snap.at - d.at)}</Text>
         </Box>
         <Box key="name" {...(compact ? {} : fixed(dingName))}>
-          <Button key={`f${k}-${key}`} label={clip(d.name, compact ? Math.max(4, m.cols - 12) : dingName)} plain {...dim(d.isOpen)} onPress={() => act.focus(d.pane)} />
+          <Button key={`f${k}-${key}`} label={compact ? nameText(d.name, Math.max(4, m.cols - 12), NAME_MIN) : nameText(d.name, dingName)} plain {...dim(d.isOpen)} onPress={() => act.focus(d.pane)} />
         </Box>
         {compact ? null : (
           <Box key="kind" {...fixed(8)}>
