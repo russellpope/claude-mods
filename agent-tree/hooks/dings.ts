@@ -4,7 +4,7 @@ import { isLive, statusOf } from './tree'
 /** pane → the pane that spawned it. A pane with no entry is a top-level session. */
 export type Parents = Record<string, string>
 
-export type DingInput = { prev: HerdrAgent[]; prevAt: number; next: HerdrAgent[]; at: number; parents: Parents }
+export type DingInput = { prev: HerdrAgent[]; prevAt: number; next: HerdrAgent[]; at: number; root: string; parents: Parents }
 
 export const KEEP_DINGS = 50
 
@@ -27,19 +27,21 @@ const judge = (a: HerdrAgent, kind: Ding['kind'], byPane: Map<string, HerdrAgent
  * The changes herdr plays a sound for between two agent lists: a turn that ended in a background
  * tab (working → done) and an agent that started asking for input (→ blocked).
  */
-export const findDings = ({ prev, prevAt, next, at, parents }: DingInput): Ding[] => {
+export const findDings = ({ prev, prevAt, next, at, root, parents }: DingInput): Ding[] => {
   if (!prevAt || at - prevAt > STALE_MS) return []
   const before = new Map(prev.map(a => [a.pane, a]))
   const byPane = new Map(next.map(a => [a.pane, a]))
   const found: Ding[] = []
   for (const a of next) {
+    // The session drawing the pane: you are reading it.
+    if (a.pane === root) continue
     const b = before.get(a.pane)
     if (!b || b.terminal !== a.terminal) continue
     const isAsking = a.status === 'blocked' && b.status !== 'blocked'
     if (!isAsking && !(b.status === 'working' && a.status === 'done')) continue
     const kind = isAsking || /^BLOCKED:/i.test(a.title) ? 'asking' : 'finished'
     const why = judge(a, kind, byPane, parents)
-    found.push({ at, pane: a.pane, terminal: a.terminal, name: a.name || a.pane, kind, title: a.title || a.label, why, needsYou: !why, isOpen: !why })
+    found.push({ at, pane: a.pane, terminal: a.terminal, name: a.name, kind, title: a.title || a.label, why, needsYou: !why, isOpen: !why })
   }
   return found
 }
@@ -74,3 +76,7 @@ export const parentsOf = (edges: Edge[], nodes: TreeNode[]): Parents => {
   for (const n of nodes) if (n.inferred) parents[n.pane] = n.parent
   return parents
 }
+
+/** A ding herdr has no agent name for takes its tab's label, as herdr's tab bar shows it, else its pane. */
+export const nameDings = (found: Ding[], agents: HerdrAgent[], labels: Record<string, string>): Ding[] =>
+  found.map(d => (d.name ? d : { ...d, name: labels[agents.find(a => a.pane === d.pane)?.tab ?? ''] || d.pane }))

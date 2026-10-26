@@ -544,7 +544,9 @@ describe('dings', () => {
   const LEAD = agent('wL:p1', 'lead-l', 'sL')
   const IMPL = agent('wL:p2', 'l-impl', 'sI')
   const REVIEW = agent('wL:p3', 'l-review', 'sR')
-  const OTHER = agent('wB:p1', 'other-session', 'sB')
+  // herdr has no name for it: its row takes its tab's label.
+  const OTHER = { ...agent('wB:p1', '', 'sB'), tab_id: 'w9:t19' }
+  const TABS = JSON.stringify({ id: 'cli:tab:list', result: { tabs: [{ tab_id: 'w9:t19', label: 'mods' }] } })
   const PROPS = { title: 'Agent tree', isFocused: true, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
 
   test('two polls: the Dings section, the ! on a tree row and the status line show what needs you; pressing a ding focuses its pane and closes it', async ($, on) => {
@@ -553,7 +555,7 @@ describe('dings', () => {
     let now = NOW
     on('clock.now', async () => ({ value: now }))
     ledger(on)
-    let agents = [ROOT, is(LEAD, 'working'), is(IMPL, 'working'), is(REVIEW, 'working'), is(OTHER, 'working')]
+    let agents = [is(ROOT, 'working'), is(LEAD, 'working'), is(IMPL, 'working'), is(REVIEW, 'working'), is(OTHER, 'working')]
     const focused: string[] = []
     on('process.run', async (_$, e) => {
       if (e.argv[0] !== 'herdr') return failed
@@ -561,6 +563,7 @@ describe('dings', () => {
         focused.push(e.argv[3] ?? '')
         return ok('{}')
       }
+      if (e.argv[1] === 'tab') return ok(TABS)
       return ok(list(...agents))
     })
     const statuses: (string | undefined)[] = []
@@ -569,7 +572,8 @@ describe('dings', () => {
     await pane.open($)
     now = NOW + 2000
     // The lead's turn ends in the tab you are on (no ding); its implementer finishes, its reviewer asks, the other session finishes.
-    agents = [ROOT, is(LEAD, 'idle'), is(IMPL, 'done'), is(REVIEW, 'blocked'), is(OTHER, 'done')]
+    // This session's own turn ends too: you are reading its pane, so that is no ding.
+    agents = [is(ROOT, 'done'), is(LEAD, 'idle'), is(IMPL, 'done'), is(REVIEW, 'blocked'), is(OTHER, 'done')]
     await pane.open($)
 
     expect(statuses.at(-1)).toBe('tree 0● 1! · 2 need you')
@@ -580,7 +584,7 @@ describe('dings', () => {
     const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
     expect((await ui.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 3 · 2 need you')
     const row = async (pane: string) => (await ui.find({ type: 'Box', key: `d-${pane}-${NOW + 2000}` }))?.text
-    expect(await row('wB:p1')).toMatch(/^!\s*0s\s*other-session\s*finished/)
+    expect(await row('wB:p1')).toMatch(/^!\s*0s\s*mods\s*finished/)
     expect(await row('wL:p3')).toMatch(/^!\s*0s\s*l-review\s*asking/)
     expect(await row('wL:p2')).toMatch(/^\s*0s\s*l-impl\s*finished\s*lead-l still running$/)
     // In the tree, the reviewer that asked carries the mark; its sibling does not.
@@ -592,7 +596,7 @@ describe('dings', () => {
     expect(focused).toEqual(['wB:p1'])
     expect(statuses.at(-1)).toBe('tree 0● 1! · 1 needs you')
     expect((await ui.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 3 · 1 needs you')
-    expect(await row('wB:p1')).toMatch(/^\s*0s\s*other-session/)
+    expect(await row('wB:p1')).toMatch(/^\s*0s\s*mods/)
     await ui.unmount()
   })
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { AgentStatus, Ding, Edge, HerdrAgent, TreeNode } from '../types'
-import { addDings, findDings, markSeen, parentsOf, settleDings } from './dings'
+import { addDings, findDings, markSeen, nameDings, parentsOf, settleDings } from './dings'
 
 const ag = (pane: string, status: AgentStatus, over: Partial<HerdrAgent> = {}): HerdrAgent => ({
   pane, name: pane, harness: 'claude', status, title: '', label: '', cwd: '', workspace: pane.split(':')[0] ?? '', session: '', terminal: `t-${pane}`, ...over,
@@ -26,7 +26,7 @@ describe('findDings', () => {
       ag('wT:p1', 'done', { terminal: 'new' }),
     ]
 
-    expect(findDings({ prev, prevAt: AT - 2000, next, at: AT, parents: {} }).map(d => [d.pane, d.kind])).toEqual([
+    expect(findDings({ prev, prevAt: AT - 2000, next, at: AT, root: 'w9:p1', parents: {} }).map(d => [d.pane, d.kind])).toEqual([
       ['wO:p1', 'finished'],
       ['wB:p1', 'asking'],
     ])
@@ -48,7 +48,7 @@ describe('findDings', () => {
       ag('wK:p1', 'done', { title: 'BLOCKED: pick the I576 scope' }),
     ]
 
-    const found = findDings({ prev, prevAt: AT - 2000, next, at: AT, parents })
+    const found = findDings({ prev, prevAt: AT - 2000, next, at: AT, root: 'w9:p1', parents })
 
     expect(found.map(d => [d.pane, d.kind, d.needsYou, d.why])).toEqual([
       // Nobody spawned it: a session you drive, waiting on you.
@@ -73,9 +73,25 @@ describe('findDings', () => {
     const prev = [ag('wO:p1', 'working')]
     const next = [ag('wO:p1', 'done')]
 
-    expect(findDings({ prev, prevAt: 0, next, at: AT, parents: {} })).toEqual([])
-    expect(findDings({ prev, prevAt: AT - 30_001, next, at: AT, parents: {} })).toEqual([])
-    expect(findDings({ prev, prevAt: AT - 30_000, next, at: AT, parents: {} })).toHaveLength(1)
+    expect(findDings({ prev, prevAt: 0, next, at: AT, root: 'w9:p1', parents: {} })).toEqual([])
+    expect(findDings({ prev, prevAt: AT - 30_001, next, at: AT, root: 'w9:p1', parents: {} })).toEqual([])
+    expect(findDings({ prev, prevAt: AT - 30_000, next, at: AT, root: 'w9:p1', parents: {} })).toHaveLength(1)
+  })
+
+  test('the session drawing the pane dings nothing for itself: you are already looking at it', () => {
+    const prev = [ag('w9:pR', 'working'), ag('wO:p1', 'working')]
+    const next = [ag('w9:pR', 'done'), ag('wO:p1', 'done')]
+
+    expect(findDings({ prev, prevAt: AT - 2000, next, at: AT, root: 'w9:pR', parents: {} }).map(d => d.pane)).toEqual(['wO:p1'])
+  })
+})
+
+describe('nameDings', () => {
+  test('a ding from an agent herdr has no name for takes its tab label, as the tab bar shows it; else its pane', () => {
+    const agents = [ag('w9:p1A', 'done', { name: '', tab: 'w9:t19' }), ag('wX:p1', 'done', { name: '', tab: 'wX:t9' })]
+    const found = [ding('w9:p1A', AT, { name: '' }), ding('wX:p1', AT, { name: '' }), ding('wL:p1', AT, { name: 'lead-l' })]
+
+    expect(nameDings(found, agents, { 'w9:t19': 'mods' }).map(d => d.name)).toEqual(['mods', 'wX:p1', 'lead-l'])
   })
 })
 

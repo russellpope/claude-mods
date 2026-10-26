@@ -25,6 +25,8 @@ export type HerdrAgent = {
   workspace: string
   session: string
   terminal: string
+  /** The herdr tab it sits in; absent in a list kept from before tabs were read. */
+  tab?: string
 }
 
 export type Usage = {

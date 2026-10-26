@@ -12,6 +12,7 @@ type RawAgent = {
   cwd?: string
   workspace_id?: string
   terminal_id?: string
+  tab_id?: string
   agent_session?: { value?: string }
 }
 
@@ -26,6 +27,7 @@ export const toAgent = (r: RawAgent): HerdrAgent => ({
   workspace: r.workspace_id ?? '',
   session: r.agent_session?.value ?? '',
   terminal: r.terminal_id ?? '',
+  tab: r.tab_id ?? '',
 })
 
 /** `herdr agent list` stdout → agents. Throws on anything that is not an agent_list. */
@@ -70,5 +72,15 @@ export const herdrError = (stdout: string): string => {
     return typeof m === 'string' ? m : ''
   } catch {
     return ''
+  }
+}
+
+/** `herdr tab list` stdout → each tab's label by its id. Labels only name rows, so a bad answer is no labels. */
+export const parseTabList = (stdout: string): Record<string, string> => {
+  try {
+    const o = JSON.parse(stdout) as { result?: { tabs?: { tab_id?: string; label?: string }[] } }
+    return Object.fromEntries((o.result?.tabs ?? []).flatMap(t => (t.tab_id && t.label ? [[t.tab_id, t.label]] : [])))
+  } catch {
+    return {}
   }
 }

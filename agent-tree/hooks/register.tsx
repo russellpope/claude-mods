@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Ding, Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
-import { addDings, findDings, markSeen, needYou, parentsOf, settleDings } from './dings'
-import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
+import { addDings, findDings, markSeen, nameDings, needYou, parentsOf, settleDings } from './dings'
+import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted, parseTabList } from './herdr'
 import { WEEK_MS, edgeAt, edgeFileName, ledgerDir, makeEdge, parseEdge } from './ledger'
 import type { TreeNode, Usage } from '../types'
 import { addRollout, codexUsage } from './codex'
@@ -199,6 +199,12 @@ async function focusPane($: EngineInterface, pane: string): Promise<boolean> {
   return false
 }
 
+/** Each herdr tab's label by id; none when herdr does not answer. */
+async function tabLabels($: EngineInterface): Promise<Record<string, string>> {
+  const r = await $.process.run(['herdr', 'tab', 'list'], { timeoutMs: 5000 }).catch(() => null)
+  return r && r.exitCode === 0 ? parseTabList(r.stdout) : {}
+}
+
 // A row press puts the pane in front of you, which answers its open dings.
 async function focusRow($: EngineInterface, pane: string) {
   if (!(await focusPane($, pane))) return
@@ -235,7 +241,9 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
     await $.store.set('bindings', { ...built.bindings, ...latest }).catch(() => undefined)
   }
   // A list from before an error is stale: the turns since then were never seen.
-  const found = findDings({ prev: prev.all, prevAt: prev.error ? 0 : prev.at, next: agents, at, parents: parentsOf(edges, built.nodes) })
+  let found = findDings({ prev: prev.all, prevAt: prev.error ? 0 : prev.at, next: agents, at, root, parents: parentsOf(edges, built.nodes) })
+  // herdr is asked for its tabs only when a ding comes from an agent it has no name for.
+  if (found.some(d => !d.name)) found = nameDings(found, agents, await tabLabels($))
   const log = await update($, dings, l => settleDings(addDings(l, found), agents))
   let nodes = built.nodes
   let repos = prev.repos
