@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Ding, Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
-import { addDings, findDings, markSeen, nameDings, needYou, parentsOf, settleDings } from './dings'
+import { ackAll, addDings, findDings, markSeen, nameDings, needYou, parentsOf, settleDings } from './dings'
 import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted, parseTabList } from './herdr'
 import { WEEK_MS, edgeAt, edgeFileName, ledgerDir, makeEdge, parseEdge } from './ledger'
 import type { TreeNode, Usage } from '../types'
@@ -29,6 +29,7 @@ export const panel = atom({ plugin: 'agent-tree', key: 'panel' } as const, {
   isInProcessOpen: false,
   isAutoOpened: false,
   isDingsOpen: true,
+  isAckedOpen: false,
 } as Panel)
 export const frame = atom({ plugin: 'agent-tree', key: 'frame' } as const, 0)
 export const inproc = atom({ plugin: 'agent-tree', key: 'inproc' } as const, [] as InProcRun[])
@@ -205,11 +206,15 @@ async function tabLabels($: EngineInterface): Promise<Record<string, string>> {
   return r && r.exitCode === 0 ? parseTabList(r.stdout) : {}
 }
 
+/** Acks a pane's open dings, or with no pane every open ding, and recounts the status line. */
+async function ackDings($: EngineInterface, pane?: string) {
+  const list = await update($, dings, l => (pane === undefined ? ackAll(l) : markSeen(l, pane)))
+  $.ui.status(statusLine((await read($, snapshot)).nodes, needYou(list)))
+}
+
 // A row press puts the pane in front of you, which answers its open dings.
 async function focusRow($: EngineInterface, pane: string) {
-  if (!(await focusPane($, pane))) return
-  const list = await update($, dings, l => markSeen(l, pane))
-  $.ui.status(statusLine((await read($, snapshot)).nodes, needYou(list)))
+  if (await focusPane($, pane)) await ackDings($, pane)
 }
 
 export function refresh($: EngineInterface, full: boolean): Promise<void> {
@@ -352,6 +357,7 @@ export const register: Register = (on, options) => {
       },
       {
         focus: pane => void focusRow($, pane),
+        ack: pane => void ackDings($, pane),
         setPanel: fn => void update($, panel, fn),
       },
     )

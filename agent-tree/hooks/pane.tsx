@@ -1,5 +1,6 @@
 import type { Ding, HerdrAgent, InProcRun, Panel, Snapshot, TreeNode } from '../types'
 import { CRAB_ROWS, CRAB_WIDTH, MINI, ROLE_COLOR, halfBlock, moodOf, moodWord, spriteFor } from './crab'
+import { KEEP_ACKED } from './dings'
 import { costumeOfRole, crabSvg, heroSvg } from './svg-crab'
 import { partition } from './tree'
 import { fmtCost, fmtTime, modelName } from './usage'
@@ -26,7 +27,8 @@ import {
 } from './view'
 
 export type PaneModel = { snap: Snapshot; panel: Panel; frame: number; inproc: InProcRun[]; dings: Ding[]; cols: number; surface: string }
-export type PaneActions = { focus: (pane: string) => void; setPanel: (fn: (p: Panel) => Panel) => void }
+/** `ack` with no pane acks every open ding. */
+export type PaneActions = { focus: (pane: string) => void; ack: (pane?: string) => void; setPanel: (fn: (p: Panel) => Panel) => void }
 
 // `ui` is `$.ui.resolve(e)` for a Pane render; typed loosely so the terminal and desktop tables both fit.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -35,8 +37,6 @@ type UI = any
 const NAME_MAX = 32
 const METER_DOTS = 10
 const TIME_WIDTH = 8
-// Every ding that needs you, then the newest others up to this many rows.
-const DINGS_SHOWN = 8
 const MARK_COLOR = '#D0453F'
 
 export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
@@ -219,17 +219,18 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     <Button key={key} label={`${isOpen ? '▾' : '▸'} ${label}`} plain onPress={() => act.setPanel(toggle)} />
   )
 
-  // Newest first: every ding still open, then the newest of the rest.
+  // Newest first: the dings that need you, then the acknowledged ones (a log kept from before the
+  // cap can hold more than it keeps now).
   const newest = [...m.dings].reverse()
   const openDings = newest.filter(d => d.isOpen)
-  const keep = new Set([...openDings, ...newest.filter(d => !d.isOpen).slice(0, Math.max(0, DINGS_SHOWN - openDings.length))])
-  const listed = newest.filter(d => keep.has(d))
-  const dingName = Math.min(NAME_MAX, listed.reduce((w, d) => Math.max(w, d.name.length), 0))
-  const dingRow = (d: Ding) => {
+  const acked = newest.filter(d => !d.isOpen).slice(0, KEEP_ACKED)
+  const dingName = Math.min(NAME_MAX, [...openDings, ...acked].reduce((w, d) => Math.max(w, d.name.length), 0))
+  // `k`: d for a ding that needs you, k for an acknowledged one.
+  const dingRow = (d: Ding, k: 'd' | 'k') => {
     const key = `${d.pane}-${d.at}`
     const note = d.needsYou ? d.title : d.why
     return (
-      <Box key={`d-${key}`} flexDirection="row" gap={1}>
+      <Box key={`${k}-${key}`} flexDirection="row" gap={1}>
         <Box key="mark" {...fixed(1)}>
           {d.isOpen ? <Text color={MARK_COLOR}>!</Text> : null}
         </Box>
@@ -237,13 +238,14 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
           <Text dimColor>{ageText(snap.at - d.at)}</Text>
         </Box>
         <Box key="name" {...(compact ? {} : fixed(dingName))}>
-          <Button key={`fd-${key}`} label={clip(d.name, compact ? Math.max(4, m.cols - 8) : dingName)} plain {...dim(d.isOpen)} onPress={() => act.focus(d.pane)} />
+          <Button key={`f${k}-${key}`} label={clip(d.name, compact ? Math.max(4, m.cols - 12) : dingName)} plain {...dim(d.isOpen)} onPress={() => act.focus(d.pane)} />
         </Box>
         {compact ? null : (
           <Box key="kind" {...fixed(8)}>
             <Text {...dim(d.isOpen)}>{d.kind}</Text>
           </Box>
         )}
+        {d.isOpen ? <Button key={`ack-${key}`} label="✓" plain onPress={() => act.ack(d.pane)} /> : null}
         {compact || !note ? null : (
           <Text key="note" dimColor wrap="truncate-end">
             {note}
@@ -253,11 +255,16 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     )
   }
   const isDingsOpen = panel.isDingsOpen ?? true
+  const isAckedOpen = panel.isAckedOpen ?? false
   const dingRows = m.dings.length ? (
     <Box key="dings" flexDirection="column">
-      {section('s-dings', `Dings · ${m.dings.length}${openDings.length ? ` · ${needText(openDings.length)}` : ''}`, isDingsOpen, p => ({ ...p, isDingsOpen: !(p.isDingsOpen ?? true) }))}
-      {isDingsOpen ? listed.map(dingRow) : null}
-      {isDingsOpen && m.dings.length > listed.length ? <Text dimColor>{`… ${m.dings.length - listed.length} more`}</Text> : null}
+      <Box key="dings-head" flexDirection="row" gap={2}>
+        {section('s-dings', `Dings · ${openDings.length ? needText(openDings.length) : 'none need you'}`, isDingsOpen, p => ({ ...p, isDingsOpen: !(p.isDingsOpen ?? true) }))}
+        {openDings.length ? <Button key="ack-all" label="ack all" plain dimColor onPress={() => act.ack()} /> : null}
+      </Box>
+      {isDingsOpen ? openDings.map(d => dingRow(d, 'd')) : null}
+      {isDingsOpen && acked.length ? section('s-acked', `Acknowledged · ${acked.length}`, isAckedOpen, p => ({ ...p, isAckedOpen: !(p.isAckedOpen ?? false) })) : null}
+      {isDingsOpen && isAckedOpen ? acked.map(d => dingRow(d, 'k')) : null}
     </Box>
   ) : null
 

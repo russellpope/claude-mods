@@ -89,6 +89,8 @@ export type Panel = {
   isAutoOpened: boolean
   /** Absent in a panel kept from before the Dings section: open. */
   isDingsOpen?: boolean
+  /** Absent: collapsed. */
+  isAckedOpen?: boolean
 }
 
 /** A change herdr plays a sound for: a turn ending in a background tab, or an agent asking for input. */

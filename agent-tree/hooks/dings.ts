@@ -6,7 +6,8 @@ export type Parents = Record<string, string>
 
 export type DingInput = { prev: HerdrAgent[]; prevAt: number; next: HerdrAgent[]; at: number; root: string; parents: Parents }
 
-export const KEEP_DINGS = 50
+// Open dings are all kept (a pane has at most one); of the acknowledged ones, the newest this many.
+export const KEEP_ACKED = 10
 
 // The poll runs every 2 s with the pane open, every 10 s without. A list older than this missed
 // turns that began and ended unseen, so comparing with it would put old dings at the wrong time.
@@ -46,28 +47,41 @@ export const findDings = ({ prev, prevAt, next, at, root, parents }: DingInput):
   return found
 }
 
-/** Appends new dings, closing the older open ones of the same panes, and keeps the newest KEEP_DINGS. */
+/** Every open ding, and the newest KEEP_ACKED closed ones, in the order they came. */
+const trim = (list: Ding[]): Ding[] => {
+  const closed = list.filter(d => !d.isOpen)
+  if (closed.length <= KEEP_ACKED) return list
+  const dropped = new Set(closed.slice(0, closed.length - KEEP_ACKED))
+  return list.filter(d => !dropped.has(d))
+}
+
+/** Appends new dings, closing the older open ones of the same panes. */
 export const addDings = (list: Ding[], found: Ding[]): Ding[] => {
   if (!found.length) return list
   const panes = new Set(found.map(d => d.pane))
-  return [...list.map(d => (d.isOpen && panes.has(d.pane) ? { ...d, isOpen: false } : d)), ...found].slice(-KEEP_DINGS)
+  return trim([...list.map(d => (d.isOpen && panes.has(d.pane) ? { ...d, isOpen: false } : d)), ...found])
 }
 
 /** An open ding closes once its agent works again or has left its pane. */
 export const settleDings = (list: Ding[], agents: HerdrAgent[]): Ding[] => {
   if (!list.some(d => d.isOpen)) return list
   const byPane = new Map(agents.map(a => [a.pane, a]))
-  return list.map(d => {
-    if (!d.isOpen) return d
-    const a = byPane.get(d.pane)
-    return a && a.terminal === d.terminal && a.status !== 'working' ? d : { ...d, isOpen: false }
-  })
+  return trim(
+    list.map(d => {
+      if (!d.isOpen) return d
+      const a = byPane.get(d.pane)
+      return a && a.terminal === d.terminal && a.status !== 'working' ? d : { ...d, isOpen: false }
+    }),
+  )
 }
 
 /** How many dings still need you. */
 export const needYou = (list: Ding[]): number => list.filter(d => d.isOpen).length
 
-export const markSeen =(list: Ding[], pane: string): Ding[] => list.map(d => (d.isOpen && d.pane === pane ? { ...d, isOpen: false } : d))
+/** Acks a pane's open dings: you pressed its ✓, or its name and went there. */
+export const markSeen = (list: Ding[], pane: string): Ding[] => trim(list.map(d => (d.isOpen && d.pane === pane ? { ...d, isOpen: false } : d)))
+
+export const ackAll = (list: Ding[]): Ding[] => trim(list.map(d => (d.isOpen ? { ...d, isOpen: false } : d)))
 
 /** Parents from every recorded spawn (a pane's newest wins) and from the tree's inferred workers. */
 export const parentsOf = (edges: Edge[], nodes: TreeNode[]): Parents => {

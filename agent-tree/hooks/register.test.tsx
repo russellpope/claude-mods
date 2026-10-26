@@ -549,7 +549,11 @@ describe('dings', () => {
   const TABS = JSON.stringify({ id: 'cli:tab:list', result: { tabs: [{ tab_id: 'w9:t19', label: 'mods' }] } })
   const PROPS = { title: 'Agent tree', isFocused: true, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
 
-  test('two polls: the Dings section, the ! on a tree row and the status line show what needs you; pressing a ding focuses its pane and closes it', async ($, on) => {
+  // Two polls through /agent-tree. In between, the lead's turn ends in the tab you are on (no ding), its implementer
+  // finishes (dim), its reviewer asks, the unnamed session in tab "mods" finishes, and this session's own turn ends
+  // (you are reading its pane: no ding). Then the pane is drawn on the terminal.
+  const T = NOW + 2000
+  const twoPolls = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1]) => {
     mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1' })
     mock.store(on)
     let now = NOW
@@ -568,35 +572,74 @@ describe('dings', () => {
     })
     const statuses: (string | undefined)[] = []
     const pane = watchPane(on, statuses)
-
     await pane.open($)
-    now = NOW + 2000
-    // The lead's turn ends in the tab you are on (no ding); its implementer finishes, its reviewer asks, the other session finishes.
-    // This session's own turn ends too: you are reading its pane, so that is no ding.
+    now = T
     agents = [is(ROOT, 'done'), is(LEAD, 'idle'), is(IMPL, 'done'), is(REVIEW, 'blocked'), is(OTHER, 'done')]
     await pane.open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
+    const text = async (key: string) => (await ui.find({ type: 'Box', key }))?.text
+    const label = async (key: string) => (await ui.find({ type: 'Button', key }))?.props.label
+    return { ui, text, label, focused, statuses }
+  }
+
+  test('only the dings that need you are listed, each with its ✓, a ! on its tree row and a count on the status line; the dim one waits in Acknowledged, collapsed', async ($, on) => {
+    const { ui, text, label, statuses } = await twoPolls($, on)
 
     expect(statuses.at(-1)).toBe('tree 0● 1! · 2 need you')
-    const desktop = await $.ui.mount({ plugin: 'agent-tree', surface: 'desktop', component: 'Pane', requestId: 'agent-tree', props: PROPS })
-    expect((await desktop.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 3 · 2 need you')
-    expect(await desktop.find({ type: 'Button', key: `fd-wL:p3-${NOW + 2000}` })).toBeDefined()
-    await desktop.unmount()
-    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
-    expect((await ui.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 3 · 2 need you')
-    const row = async (pane: string) => (await ui.find({ type: 'Box', key: `d-${pane}-${NOW + 2000}` }))?.text
-    expect(await row('wB:p1')).toMatch(/^!\s*0s\s*mods\s*finished/)
-    expect(await row('wL:p3')).toMatch(/^!\s*0s\s*l-review\s*asking/)
-    expect(await row('wL:p2')).toMatch(/^\s*0s\s*l-impl\s*finished\s*lead-l still running$/)
+    expect(await label('s-dings')).toBe('▾ Dings · 2 need you')
+    expect(await label('ack-all')).toBe('ack all')
+    expect(await text(`d-wB:p1-${T}`)).toMatch(/^!\s*0s\s*mods\s*finished/)
+    expect(await text(`d-wL:p3-${T}`)).toMatch(/^!\s*0s\s*l-review\s*asking/)
+    expect(await label(`ack-wL:p3-${T}`)).toBe('✓')
+    expect(await text(`d-wL:p2-${T}`)).toBeUndefined()
     // In the tree, the reviewer that asked carries the mark; its sibling does not.
-    expect((await ui.find({ type: 'Box', key: `m-wL:p3-${NOW - 3000}` }))?.text).toBe('!')
-    expect((await ui.find({ type: 'Box', key: `m-wL:p2-${NOW - 4000}` }))?.text ?? '').toBe('')
+    expect(await text(`m-wL:p3-${NOW - 3000}`)).toBe('!')
+    expect((await text(`m-wL:p2-${NOW - 4000}`)) ?? '').toBe('')
+    expect(await label('s-acked')).toBe('▸ Acknowledged · 1')
+    expect(await text(`k-wL:p2-${T}`)).toBeUndefined()
 
-    await ui.press({ key: `fd-wB:p1-${NOW + 2000}` })
+    await ui.press({ key: 's-acked' })
 
-    expect(focused).toEqual(['wB:p1'])
+    expect(await label('s-acked')).toBe('▾ Acknowledged · 1')
+    expect(await text(`k-wL:p2-${T}`)).toMatch(/^\s*0s\s*l-impl\s*finished\s*lead-l still running$/)
+    expect(await label(`ack-wL:p2-${T}`)).toBeUndefined()
+    await ui.unmount()
+    const desktop = await $.ui.mount({ plugin: 'agent-tree', surface: 'desktop', component: 'Pane', requestId: 'agent-tree', props: PROPS })
+    expect((await desktop.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 2 need you')
+    expect(await desktop.find({ type: 'Button', key: `ack-wL:p3-${T}` })).toBeDefined()
+    await desktop.unmount()
+  })
+
+  test("✓ acks a ding where you are; pressing a ding's name takes you to its pane and acks it", async ($, on) => {
+    const { ui, text, label, focused, statuses } = await twoPolls($, on)
+
+    await ui.press({ key: `ack-wB:p1-${T}` })
+
+    expect(focused).toEqual([])
     expect(statuses.at(-1)).toBe('tree 0● 1! · 1 needs you')
-    expect((await ui.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 3 · 1 needs you')
-    expect(await row('wB:p1')).toMatch(/^\s*0s\s*mods/)
+    expect(await label('s-dings')).toBe('▾ Dings · 1 needs you')
+    expect(await text(`d-wB:p1-${T}`)).toBeUndefined()
+    expect(await label('s-acked')).toBe('▸ Acknowledged · 2')
+
+    await ui.press({ key: `fd-wL:p3-${T}` })
+
+    expect(focused).toEqual(['wL:p3'])
+    expect(statuses.at(-1)).toBe('tree 0● 1!')
+    expect(await label('s-dings')).toBe('▾ Dings · none need you')
+    expect(await label('ack-all')).toBeUndefined()
+    expect(await label('s-acked')).toBe('▸ Acknowledged · 3')
+    await ui.unmount()
+  })
+
+  test('ack all moves every open ding to Acknowledged and moves you nowhere', async ($, on) => {
+    const { ui, label, focused, statuses } = await twoPolls($, on)
+
+    await ui.press({ key: 'ack-all' })
+
+    expect(focused).toEqual([])
+    expect(statuses.at(-1)).toBe('tree 0● 1!')
+    expect(await label('s-dings')).toBe('▾ Dings · none need you')
+    expect(await label('s-acked')).toBe('▸ Acknowledged · 3')
     await ui.unmount()
   })
 

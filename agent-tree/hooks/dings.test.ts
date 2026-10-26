@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { AgentStatus, Ding, Edge, HerdrAgent, TreeNode } from '../types'
-import { addDings, findDings, markSeen, nameDings, parentsOf, settleDings } from './dings'
+import { ackAll, addDings, findDings, markSeen, nameDings, parentsOf, settleDings } from './dings'
 
 const ag = (pane: string, status: AgentStatus, over: Partial<HerdrAgent> = {}): HerdrAgent => ({
   pane, name: pane, harness: 'claude', status, title: '', label: '', cwd: '', workspace: pane.split(':')[0] ?? '', session: '', terminal: `t-${pane}`, ...over,
@@ -96,17 +96,36 @@ describe('nameDings', () => {
 })
 
 describe('the ding log', () => {
-  test("new dings go last, a pane's older open ding closes, and only the newest 50 stay", () => {
-    const old = Array.from({ length: 50 }, (_, i) => ding(`w${i}:p1`, i, { isOpen: false }))
-    const list = addDings([...old.slice(1), ding('wA:p1', 60)], [ding('wA:p1', 70), ding('wZ:p1', 70)])
+  test("new dings go last, a pane's older open ding closes, and every open ding stays but only the newest 10 closed ones", () => {
+    const old = [...Array.from({ length: 15 }, (_, i) => ding(`w${i}:p1`, i, { isOpen: false })), ding('wB:p1', 20), ding('wA:p1', 60)]
+    const list = addDings(old, [ding('wA:p1', 70), ding('wZ:p1', 70, { needsYou: false, isOpen: false })])
 
-    expect(list).toHaveLength(50)
-    // 49 old ones and wA:p1 at 60, plus two: the two oldest (w1, w2) go.
-    expect(list.map(d => d.pane).slice(0, 2)).toEqual(['w3:p1', 'w4:p1'])
-    expect(list.slice(-3).map(d => [d.pane, d.at, d.isOpen])).toEqual([
+    // Closed: w0–w14, wA:p1 at 60 (closed by its newer ding) and wZ:p1, 17 in all; w0–w6 go.
+    expect(list.map(d => [d.pane, d.at, d.isOpen])).toEqual([
+      ...[7, 8, 9, 10, 11, 12, 13, 14].map(i => [`w${i}:p1`, i, false]),
+      ['wB:p1', 20, true],
       ['wA:p1', 60, false],
       ['wA:p1', 70, true],
-      ['wZ:p1', 70, true],
+      ['wZ:p1', 70, false],
+    ])
+  })
+
+  test('a ding that settles itself joins the acknowledged ones, and the oldest of those goes past 10', () => {
+    const list = [...Array.from({ length: 10 }, (_, i) => ding(`c${i}:p1`, i, { isOpen: false })), ding('wW:p1', 20)]
+
+    const settled = settleDings(list, [ag('wW:p1', 'working')])
+
+    expect(settled.map(d => d.pane)).toEqual(['c1:p1', 'c2:p1', 'c3:p1', 'c4:p1', 'c5:p1', 'c6:p1', 'c7:p1', 'c8:p1', 'c9:p1', 'wW:p1'])
+    expect(settled.every(d => !d.isOpen)).toBe(true)
+  })
+
+  test('ack all closes every open ding', () => {
+    const list = [ding('wA:p1', 1), ding('wB:p1', 2, { isOpen: false, needsYou: false }), ding('wC:p1', 3)]
+
+    expect(ackAll(list).map(d => [d.pane, d.isOpen])).toEqual([
+      ['wA:p1', false],
+      ['wB:p1', false],
+      ['wC:p1', false],
     ])
   })
 
