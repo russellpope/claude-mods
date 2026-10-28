@@ -20,6 +20,8 @@ export const makeEdge = (parent: string, parentSession: string, child: HerdrAgen
   name: child.name,
   via: 'claude-mod',
   at,
+  ...(child.workspace ? { session: child.workspace } : {}),
+  ...(child.server ? { server: child.server } : {}),
 })
 
 export const parseEdge = (text: string): Edge | null => {
@@ -34,6 +36,8 @@ export const parseEdge = (text: string): Edge | null => {
       name: String(o.name ?? ''),
       via: String(o.via ?? ''),
       at: o.at,
+      ...(typeof o.session === 'string' && o.session ? { session: o.session } : {}),
+      ...(typeof o.server === 'string' && o.server ? { server: o.server } : {}),
     }
   } catch {
     return null

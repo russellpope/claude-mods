@@ -143,12 +143,12 @@ describe('refresh (through /agent-tree)', () => {
     expect((await openPane($, on)).error).toBe('herdr is not answering.')
   })
 
-  test('outside herdr: no tree, a plain message', async ($, on) => {
+  test('outside herdr and Rex: no tree, a plain message', async ($, on) => {
     mock.env(on, { HOME: '/home/me' })
     mock.store(on)
     on('clock.now', async () => ({ value: NOW }))
 
-    expect((await openPane($, on)).error).toBe('Not in a herdr pane: no agent tree here.')
+    expect((await openPane($, on)).error).toBe('Not in a herdr or Rex pane: no agent tree here.')
   })
 
   test('a recorded child shows up in the tree with its status', async ($, on) => {
@@ -683,5 +683,197 @@ describe('dings', () => {
     const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
     expect(await ui.find({ type: 'Button', key: 's-dings' })).toBeUndefined()
     await ui.unmount()
+  })
+})
+
+// Rex: one `rex do` script lists every terminal block; Claude Code names its session in a file per pid.
+const rexPane = (block: string, label: string, extra: Record<string, unknown> = {}) => ({
+  session: 'session:s1',
+  window: `window:${block}`,
+  block,
+  label,
+  owner: 'client:app',
+  program_status: { records: [{ state: 'idle', app: 'claude-code' }] },
+  process: { foreground: { pid: block === REX_ROOT ? 100 : 200, name: 'claude', cwd: '/w' } },
+  title: { title: '' },
+  ...extra,
+})
+const REX_ROOT = 'block:01a1-root'
+const REX_CHILD = 'block:01a1-c41d'
+const rexList = (...panes: ReturnType<typeof rexPane>[]) => JSON.stringify({ panes, windows: { [`window:${REX_CHILD}`]: 'team' } })
+const isRexList = (argv: readonly string[]) => argv[0] === 'rex' && argv[1] === 'do' && argv[2] === '-e'
+const REX_RUN = JSON.stringify({ window_id: `window:${REX_CHILD}`, block_ids: [REX_CHILD], revision: 9 }, null, 2)
+
+describe('Rex', () => {
+  test('rex run output writes one edge, named by the block label, before its agent has started', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('fs.read', async (_$, e) => ({ value: e.path === '/home/me/.claude/sessions/100.json' ? '{"sessionId":"root-session"}' : '' }))
+    const writes: { path: string; text: string }[] = []
+    on('fs.write', async (_$, e) => {
+      writes.push({ path: e.path, text: e.text })
+      return { value: undefined }
+    })
+    let lists = 0
+    on('process.run', async (_$, e) => {
+      if (!isRexList(e.argv)) return failed
+      // The new block still runs its shell: Rex lists it, but not as an agent.
+      return ok(lists++ === 0 ? rexList(rexPane(REX_ROOT, 'shell')) : rexList(rexPane(REX_ROOT, 'shell'), rexPane(REX_CHILD, 'demo-impl', { program_status: { records: [] }, process: { foreground: { pid: 300, name: 'fish', cwd: '/w' } } })))
+    })
+    on('tool.call', { tool: 'Bash' }, bash(REX_RUN))
+
+    await $.tool.call({ tool: 'Bash', command: 'rex run -s "$REX_SESSION" --label demo-impl --focus=false --json -- claude --permission-mode auto' })
+
+    expect(writes).toHaveLength(1)
+    expect(writes[0]?.path).toBe(`/home/me/.local/state/agent-tree/edges/${NOW}-block_01a1_c41d.json`)
+    expect(JSON.parse(writes[0]?.text ?? '')).toMatchObject({ v: 1, parent: REX_ROOT, parentSession: 'root-session', child: REX_CHILD, name: 'demo-impl', via: 'claude-mod' })
+  })
+
+  test('rex send of a harness into an existing block: the list diff finds the new agent', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('fs.read', async () => ({ value: '' }))
+    const writes: string[] = []
+    on('fs.write', async (_$, e) => {
+      writes.push(e.text)
+      return { value: undefined }
+    })
+    let lists = 0
+    on('process.run', async (_$, e) =>
+      isRexList(e.argv) ? ok(lists++ === 0 ? rexList(rexPane(REX_ROOT, 'shell')) : rexList(rexPane(REX_ROOT, 'shell'), rexPane(REX_CHILD, 'quiet-fixer'))) : failed,
+    )
+    on('tool.call', { tool: 'Bash' }, bash(''))
+
+    await $.tool.call({ tool: 'Bash', command: `rex send -s "$REX_SESSION" -b ${REX_CHILD} 'claude --model sonnet' && rex send-key -s "$REX_SESSION" -b ${REX_CHILD} enter` })
+
+    expect(writes.map(t => [JSON.parse(t).child, JSON.parse(t).name])).toEqual([[REX_CHILD, 'quiet-fixer']])
+  })
+
+  test('negative control: inside herdr, even under Rex, a rex run records nothing and lists nothing', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const writes: string[] = []
+    on('fs.write', async (_$, e) => {
+      writes.push(e.text)
+      return { value: undefined }
+    })
+    const runs: string[] = []
+    on('process.run', async (_$, e) => {
+      runs.push(e.argv.slice(0, 2).join(' '))
+      return failed
+    })
+    on('tool.call', { tool: 'Bash' }, bash(REX_RUN))
+
+    // herdr is the nearer multiplexer here, so a rex spawn is not this session's pane tree.
+    await $.tool.call({ tool: 'Bash', command: 'rex run --json -- claude' })
+
+    expect(writes).toEqual([])
+    expect(runs).toEqual([])
+  })
+
+  test('a recorded child shows in the tree with its Rex status and its DONE: label as title', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const edgeText = JSON.stringify({ v: 1, parent: REX_ROOT, parentSession: '', child: REX_CHILD, name: 'demo-impl', via: 'claude-mod', at: NOW - 1000 })
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-block_01a1_c41d.json`, kind: 'file' as const, size: edgeText.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async (_$, e) => ({ value: e.path.includes('/edges/') ? edgeText : '' }))
+    on('fs.exists', async () => ({ value: false }))
+    on('process.run', async (_$, e) =>
+      isRexList(e.argv) ? ok(rexList(rexPane(REX_ROOT, 'shell'), rexPane(REX_CHILD, 'DONE: shipped', { program_status: { records: [{ state: 'idle', app: 'codex' }] } }))) : failed,
+    )
+
+    const snap = await openPane($, on)
+
+    expect(snap.error).toBe('')
+    expect(snap.nodes.map(n => [n.pane, n.name, n.harness, n.status, n.title])).toEqual([[REX_CHILD, 'demo-impl', 'codex', 'done', 'DONE: shipped']])
+  })
+
+  test('Rex not answering: the snapshot names Rex', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('process.run', async () => failed)
+
+    expect((await openPane($, on)).error).toBe('Rex is not answering.')
+  })
+
+  test("pressing a row's name focuses its block, then shows it in the app that owns this session's block", async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const edgeText = JSON.stringify({ v: 1, parent: REX_ROOT, parentSession: '', child: REX_CHILD, name: 'demo-impl', via: 'claude-mod', at: NOW - 1000 })
+    on('fs.list', async () => ({ value: [{ name: `${NOW - 1000}-block_01a1_c41d.json`, kind: 'file' as const, size: edgeText.length, mtimeMs: 0, isLink: false }] }))
+    on('fs.read', async (_$, e) => ({ value: e.path.includes('/edges/') ? edgeText : '' }))
+    on('fs.exists', async () => ({ value: false }))
+    const focus: (readonly string[])[] = []
+    on('process.run', async (_$, e) => {
+      if (isRexList(e.argv)) return ok(rexList(rexPane(REX_ROOT, 'shell', { owner: 'client:mac' }), rexPane(REX_CHILD, 'demo-impl')))
+      if (e.argv[0] === 'rex') {
+        focus.push(e.argv)
+        return ok('')
+      }
+      return failed
+    })
+
+    const snap = await watchPane(on).open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+    await ui.press({ key: `f-${REX_CHILD}-${snap.nodes[0]?.startedAt}` })
+    await ui.unmount()
+
+    expect(focus).toEqual([
+      ['rex', 'api', 'call', '-s', 'session:s1', 'session.focus_block', JSON.stringify({ session_id: 'session:s1', block_id: REX_CHILD })],
+      ['rex', '-C', 'client:mac', 'do', 'session.select', 'session_id=session:s1', `window_id=window:${REX_CHILD}`],
+    ])
+  })
+})
+
+describe('Rex spawns from variables', () => {
+  test('a loop that names no harness still records the agent it started; a plain block it printed is not recorded', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('fs.read', async () => ({ value: '' }))
+    const writes: string[] = []
+    on('fs.write', async (_$, e) => {
+      writes.push(e.text)
+      return { value: undefined }
+    })
+    const SHELL = 'block:01a1-5e11'
+    let lists = 0
+    on('process.run', async (_$, e) =>
+      isRexList(e.argv)
+        ? ok(lists++ === 0 ? rexList(rexPane(REX_ROOT, 'shell')) : rexList(rexPane(REX_ROOT, 'shell'), rexPane(REX_CHILD, 'team-lead'), rexPane(SHELL, 'logs', { program_status: { records: [] }, process: { foreground: { pid: 5, name: 'tail', cwd: '/w' } } })))
+        : failed,
+    )
+    on('tool.call', { tool: 'Bash' }, bash(JSON.stringify({ block_ids: [SHELL] })))
+
+    await $.tool.call({ tool: 'Bash', command: 'for t in team; do rex new "$t" --json -- sh "./$t-lead.sh"; done' })
+
+    expect(writes.map(t => [JSON.parse(t).child, JSON.parse(t).name])).toEqual([[REX_CHILD, 'team-lead']])
+  })
+})
+
+describe('Rex hosts', () => {
+  test("an agent on another host is listed with its server, and this machine's session files are never read for its pid", async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('fs.list', async () => ({ value: [] }))
+    const reads: string[] = []
+    on('fs.read', async (_$, e) => {
+      reads.push(e.path)
+      return { value: '{"sessionId":"wrong-machine"}' }
+    })
+    on('process.run', async (_$, e) => (isRexList(e.argv) ? ok(rexList(rexPane(REX_ROOT, 'shell'), { ...rexPane(REX_CHILD, 'far-impl'), server: 'linux-box' } as ReturnType<typeof rexPane>)) : failed))
+
+    const snap = await openPane($, on)
+
+    const far = snap.all.find(a => a.pane === REX_CHILD)
+    expect([far?.server, far?.session]).toEqual(['linux-box', ''])
+    expect(reads).toEqual(['/home/me/.claude/sessions/100.json'])
   })
 })

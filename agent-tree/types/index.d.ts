@@ -11,6 +11,9 @@ export type Edge = {
   name: string
   via: string
   at: number
+  /** Where the child was spawned, when the multiplexer has more than one place: its Rex session (or herdr workspace) and Rex host label. */
+  session?: string
+  server?: string
 }
 
 /** One row of `herdr agent list`, trimmed to what the mod reads. */
@@ -27,6 +30,8 @@ export type HerdrAgent = {
   terminal: string
   /** The herdr tab it sits in; absent in a list kept from before tabs were read. */
   tab?: string
+  /** The Rex host it runs on, by its `rex hosts` label; absent on this server and in herdr. */
+  server?: string
 }
 
 export type Usage = {
