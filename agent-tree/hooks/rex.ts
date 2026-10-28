@@ -140,13 +140,16 @@ export const CODEX_THREAD_ARGV = (home: string, pid: number): string[] => [
 ]
 
 const REX_SPAWN = /(?:^|[;&|(`\n]|\$\(|\b(?:if|then|do|else|time|exec)\s)\s*rex\s+(?:-\S+\s+(?:\S+\s+)?)*(?:run|split|new|window\s+new|send(?!-))\b/
+// The team skills' helper (deepthought skills/lib/rex-team.sh), called by path or as "$REX_TEAM".
+const HELPER_SPAWN = /(?:rex-team\.sh|\$\{?REX_TEAM\}?)["']?\s+(?:spawn|prompt)\b/
 
 /**
- * True when a `rex` command can start an agent: it creates a block (`rex run|split|new|window new`)
- * or types into one (`rex send`). What runs there may come from a variable or a script, so the
- * agent list before and after the call decides which agents are new.
+ * True when a `rex` command can start an agent: it creates a block (`rex run|split|new|window new`,
+ * or the team helper's `spawn`) or types into one (`rex send`, the helper's `prompt`). What runs
+ * there may come from a variable or a script, so the agent list before and after the call decides
+ * which agents are new.
  */
-export const invokesRexSpawn = (command: string): boolean => REX_SPAWN.test(command)
+export const invokesRexSpawn = (command: string): boolean => REX_SPAWN.test(command) || HELPER_SPAWN.test(command)
 
 /**
  * True when the command names an agent harness: a block it printed is then recorded even before

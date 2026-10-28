@@ -120,6 +120,8 @@ describe('invokesRexSpawn', () => {
       'rex new team -c /w --json -- opencode',
       'rex send -s "$S" -b "$B" "claude --permission-mode auto" && rex send-key -s "$S" -b "$B" enter',
       'cd /w && rex -C mac run -- claude',
+      'ROLE_BLOCK=$("$REX_TEAM" spawn "$TEAM_SESSION" "$ROLE_SLOT" "$REPO" -- claude --model "$ROLE_MODEL")',
+      '~/Projects/github.com/deepthought/skills/lib/rex-team.sh prompt "$S" "$B" "Read /w/brief.md in full and carry it out."',
       'for t in a b; do out=$(rex new "$t-team" --json -- sh "$t.sh"); done',
       'rex run -s "$S" -- npm test',
     ])
@@ -127,7 +129,7 @@ describe('invokesRexSpawn', () => {
   })
 
   test('negative control: other rex commands, a key press, and text that only mentions it', () => {
-    for (const c of ['rex capture -s "$S" -b "$B" --trim', 'rex send-key -s "$S" -b "$B" enter', "echo 'rex run -- claude'", 'grep -r "rex split" docs', 'claude -p hi'])
+    for (const c of ['rex capture -s "$S" -b "$B" --trim', 'rex send-key -s "$S" -b "$B" enter', "echo 'rex run -- claude'", 'grep -r "rex split" docs', 'claude -p hi', '"$REX_TEAM" wait "$S" "$B" 600 done blocked', 'rex-team.sh read "$S" "$B" 40'])
       expect([c, invokesRexSpawn(c)]).toEqual([c, false])
   })
 
