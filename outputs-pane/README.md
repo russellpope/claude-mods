@@ -26,6 +26,7 @@ A side pane in Claude Code that lists every file Claude writes or edits in the s
 - **Icons:** Nerd Font file-type icons with colors in the style of [eza](https://github.com/eza-community/eza) `--icons`.
 - **Hover:** the row under the pointer is highlighted and the file name is underlined.
 - **Open:** clicking a file name runs your editor command with the file's path. A toast confirms it or shows the error.
+- **Rex on another machine:** when Claude runs in [Rex](#rex) and you click from a Rex app on a different machine, the file opens in a viewer split to the right of Claude instead, so it shows up where you are. Markdown and text files open in `glow`, everything else in `bat`. Press `q` to close it. Clicking another file replaces the split.
 - **`/outputs`** opens the pane by hand.
 
 The list lives in the session's state, so it survives the mod reloading but starts empty in each new session.
@@ -60,6 +61,8 @@ Start a new `claude` session. The pane opens at session start when the terminal 
 | --- | --- | --- |
 | `scratch` | `msg-*` | File names that go in the scratch section: globs separated by commas, with `*` and `?` as wildcards (`msg-*, *.log`). Only the name is matched, not the folder. Leave it blank for no scratch section. |
 | `editor` | `zed` | Command that opens a clicked file. The path is added as the last argument, so `code -r` runs `code -r <file>`. The first word is found on `PATH`; use an absolute path (`/usr/local/bin/zed`) if Claude Code doesn't see your shell's `PATH`. |
+| `markdownViewer` | `glow -p` | In Rex on another machine, the command that shows a clicked planning file in a split. The path is added as the last argument. |
+| `codeViewer` | `bat --paging=always` | The same for every other file, for example `nvim -R`. Markdown and text files use `markdownViewer`, even in scratch. |
 
 Change it from Claude Code's config menu, or in `~/.claude/settings.json`:
 
@@ -83,6 +86,12 @@ Change it from Claude Code's config menu, or in `~/.claude/settings.json`:
 - **Close** the pane with its `×`. It reopens on the next new file, or with `/outputs`.
 - **Docked or inline:** in fullscreen mode the pane docks beside the transcript; otherwise it sits above the prompt.
 - **Width:** the mod asks for 36 columns. If you have ever dragged a pane's edge, Claude Code keeps that width (`pluginPanes.dockColumns` in `~/.claude.json`), and it wins over what the mod asks for.
+
+## Rex
+
+Inside a Rex session, each click checks where you are. Rex records which Rex app owns Claude's pane, which is the one you last typed in. If that app's label matches this Mac's computer name (`scutil --get ComputerName`), the click runs your editor as usual. If it's another machine, for example a laptop looking in remotely, the click runs `rex split` to open the file in a viewer to the right of Claude's pane. The check runs on every click, so you can start on one laptop and pick up on the other.
+
+If Rex can't say who owns the pane, the click opens your editor.
 
 ## Limitations
 
