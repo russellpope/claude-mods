@@ -128,8 +128,19 @@ describe('invokesRexSpawn', () => {
       expect([c, invokesRexSpawn(c)]).toEqual([c, true])
   })
 
+  test("the team helper's spawn or prompt however the helper is named: a variable, an alias, a function, another path", () => {
+    for (const c of [
+      'RT=~/Projects/github.com/deepthought/skills/lib/rex-team.sh; for l in c1 c2; do B=$($RT spawn "$S" retro-$l "$CWD" -- claude --model opus); done',
+      'alias rt=~/x/rex-team.sh; rt spawn "$S" w1 /w -- claude',
+      'B=$(${T} spawn session:01a18a0e-8659 w1 /w -- codex)',
+      'team() { ~/x/rex-team.sh "$@"; }; team prompt "$S" "$B" "Read /w/brief.md"',
+      '/opt/bin/rt spawn \'session:01a1\' w1 /w -- claude',
+    ])
+      expect([c, invokesRexSpawn(c)]).toEqual([c, true])
+  })
+
   test('negative control: other rex commands, a key press, and text that only mentions it', () => {
-    for (const c of ['rex capture -s "$S" -b "$B" --trim', 'rex send-key -s "$S" -b "$B" enter', "echo 'rex run -- claude'", 'grep -r "rex split" docs', 'claude -p hi', '"$REX_TEAM" wait "$S" "$B" 600 done blocked', 'rex-team.sh read "$S" "$B" 40'])
+    for (const c of ['rex capture -s "$S" -b "$B" --trim', 'rex send-key -s "$S" -b "$B" enter', "echo 'rex run -- claude'", 'grep -r "rex split" docs', 'claude -p hi', '"$REX_TEAM" wait "$S" "$B" 600 done blocked', 'rex-team.sh read "$S" "$B" 40', 'grep -n "spawn" docs/*.md', 'echo spawn the worker next'])
       expect([c, invokesRexSpawn(c)]).toEqual([c, false])
   })
 

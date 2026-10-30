@@ -751,6 +751,33 @@ describe('Rex', () => {
     expect(writes.map(t => [JSON.parse(t).child, JSON.parse(t).name])).toEqual([[REX_CHILD, 'quiet-fixer']])
   })
 
+  test('the team helper through a variable, its block id kept in a variable: the list diff finds each worker', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    on('fs.read', async () => ({ value: '' }))
+    const writes: string[] = []
+    on('fs.write', async (_$, e) => {
+      writes.push(e.text)
+      return { value: undefined }
+    })
+    const team = (block: string, label: string) => rexPane(block, label, { session: 'session:team' })
+    let lists = 0
+    on('process.run', async (_$, e) =>
+      isRexList(e.argv)
+        ? ok(lists++ === 0 ? rexList(rexPane(REX_ROOT, 'shell')) : rexList(rexPane(REX_ROOT, 'shell'), team('block:01a1-c1', 'retro-c1'), team('block:01a1-c2', 'retro-c2')))
+        : failed,
+    )
+    on('tool.call', { tool: 'Bash' }, bash(''))
+
+    await $.tool.call({ tool: 'Bash', command: 'RT=~/x/rex-team.sh; for l in c1 c2; do B=$($RT spawn "$S" retro-$l "$CWD" -- claude --model opus); done' })
+
+    expect(writes.map(t => [JSON.parse(t).child, JSON.parse(t).name, JSON.parse(t).session])).toEqual([
+      ['block:01a1-c1', 'retro-c1', 'session:team'],
+      ['block:01a1-c2', 'retro-c2', 'session:team'],
+    ])
+  })
+
   test('negative control: inside herdr, even under Rex, a rex run records nothing and lists nothing', async ($, on) => {
     mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1', REX_BLOCK: REX_ROOT })
     mock.store(on)
