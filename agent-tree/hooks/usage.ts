@@ -33,7 +33,8 @@ export const modelName = (id: string): string => {
   return `${family.charAt(0).toUpperCase()}${family.slice(1).toLowerCase()} ${major}${minor ? '.' + minor : ''}`
 }
 
-export const fmtTokens = (n: number): string => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${Math.round(n)}`)
+export const fmtTokens = (n: number): string =>
+  n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${Math.round(n)}`
 
 export const fmtCost = (usd: number): string => `$${usd < 10 ? usd.toFixed(2) : usd.toFixed(1)}`
 
@@ -45,9 +46,10 @@ export const fmtTime = (ms: number): string => {
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
 }
 
-export type UsageAcc = Usage & { ids: string[]; byId: Record<string, [number, number]> }
+// byId: a message id → its [tokens, cost, cache reads, output], so a repeated line replaces its first count.
+export type UsageAcc = Omit<Usage, 'costUsd'> & { costUsd: number; ids: string[]; byId: Record<string, [number, number, number, number]> }
 
-export const emptyUsage = (): UsageAcc => ({ model: '', effort: '', contextTokens: 0, tokens: 0, costUsd: 0, ids: [], byId: {} })
+export const emptyUsage = (): UsageAcc => ({ model: '', effort: '', contextTokens: 0, window: 0, tokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, ids: [], byId: {} })
 
 const KEEP_IDS = 200
 
@@ -68,6 +70,8 @@ export const addTranscript = (acc: UsageAcc, text: string): UsageAcc => {
     const model = o.message?.model || next.model
     const ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0)
     const cost = costOf(model, u)
+    const cached = u.cache_read_input_tokens || 0
+    const out = u.output_tokens || 0
     next.model = model
     next.contextTokens = ctx
     if (typeof o.effort === 'string') next.effort = o.effort
@@ -76,18 +80,31 @@ export const addTranscript = (acc: UsageAcc, text: string): UsageAcc => {
     if (prev) {
       next.tokens -= prev[0]
       next.costUsd -= prev[1]
+      next.cachedTokens -= prev[2]
+      next.outputTokens -= prev[3]
     } else if (id) {
       next.ids.push(id)
     }
-    if (id) next.byId[id] = [ctx, cost]
+    if (id) next.byId[id] = [ctx, cost, cached, out]
     next.tokens += ctx
     next.costUsd += cost
+    next.cachedTokens += cached
+    next.outputTokens += out
   }
   while (next.ids.length > KEEP_IDS) delete next.byId[next.ids.shift() ?? '']
   return next
 }
 
-export const toUsage = (acc: UsageAcc): Usage => ({ model: acc.model, effort: acc.effort, contextTokens: acc.contextTokens, tokens: acc.tokens, costUsd: acc.costUsd })
+export const toUsage = (acc: UsageAcc): Usage => ({
+  model: acc.model,
+  effort: acc.effort,
+  contextTokens: acc.contextTokens,
+  window: acc.window,
+  tokens: acc.tokens,
+  cachedTokens: acc.cachedTokens,
+  outputTokens: acc.outputTokens,
+  costUsd: acc.costUsd,
+})
 
 export const projectDirName = (cwd: string): string => cwd.replace(/[^A-Za-z0-9]/g, '-')
 

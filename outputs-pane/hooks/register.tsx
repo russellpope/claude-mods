@@ -9,6 +9,8 @@ const TITLE = 'Outputs'
 // Requested size only: a dock width the person dragged or keyed (pluginPanes.dockColumns) wins.
 const SIZE = { columns: 36, rows: 10 }
 const DEFAULT_EDITOR = 'zed'
+const DEFAULT_MARKDOWN_VIEWER = ['glow', '-p']
+const DEFAULT_CODE_VIEWER = ['bat', '--paging=always']
 const DEFAULT_SCRATCH = 'msg-*'
 const ACCENT = '#61afef'
 const NEW = '#98c379'
@@ -17,6 +19,8 @@ const HOVER_BG = '#2c313c'
 const files = atom({ plugin: 'outputs-pane', key: 'files' } as const, [])
 const folded = atom({ plugin: 'outputs-pane', key: 'folded' } as const, ['scratch'])
 const query = atom({ plugin: 'outputs-pane', key: 'query' } as const, '')
+// The Rex block of the last viewer split, closed before the next one opens.
+const viewer = atom({ plugin: 'outputs-pane', key: 'viewer' } as const, '')
 
 const SECTIONS: { id: Section; label: string; glyph: string; color: string }[] = [
   { id: 'planning', label: 'planning', glyph: '', color: '#c678dd' },
@@ -76,6 +80,76 @@ export const editorArgv = (setting: unknown, path: string) => {
   return [...(words.length > 0 ? words : [DEFAULT_EDITOR]), path]
 }
 
+// A viewer setting is a command line like the editor's; planning files get the markdown viewer.
+export const viewerArgv = (options: Record<string, unknown>, path: string) => {
+  const isPlanning = PLANNING.test(path)
+  const setting = isPlanning ? options.markdownViewer : options.codeViewer
+  const words = (typeof setting === 'string' ? setting : '').trim().split(/\s+/).filter(Boolean)
+
+  return [...(words.length > 0 ? words : isPlanning ? DEFAULT_MARKDOWN_VIEWER : DEFAULT_CODE_VIEWER), path]
+}
+
+// The label of the Rex app that owns a block, from `session.view` and `client ls --json` output.
+export const ownerLabel = (view: string, clients: string, block: string) => {
+  try {
+    let owner: string | undefined
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) node.forEach(walk)
+      else if (node && typeof node === 'object') {
+        const one = node as { block_id?: unknown; owner?: unknown }
+        if (one.block_id === block && typeof one.owner === 'string') owner ??= one.owner
+        Object.values(node).forEach(walk)
+      }
+    }
+    walk(JSON.parse(view))
+    const list = (JSON.parse(clients) as { clients?: { client_id?: string; info?: { label?: string } }[] }).clients ?? []
+
+    return owner ? list.find(client => client.client_id === owner)?.info?.label : undefined
+  } catch {
+    return undefined
+  }
+}
+
+type Place = { kind: 'local' } | { kind: 'remote'; session: string; block: string; label: string }
+
+// In Rex, a click belongs to the app that owns Claude's pane: this Mac opens the editor, another
+// machine gets a viewer split. Asked on every click, since the person can walk between machines.
+// Anything Rex can't answer counts as local, so a click always does something.
+async function placeOf($: EngineInterface): Promise<Place> {
+  const session = await $.env.get('REX_SESSION').catch(() => undefined)
+  const block = await $.env.get('REX_BLOCK').catch(() => undefined)
+  if (!session || !block) return { kind: 'local' }
+
+  const failed = { exitCode: -1, stdout: '', stderr: '' }
+  const [view, clients, here] = await Promise.all([
+    $.process.run(['rex', 'api', 'call', '-s', session, 'session.view']).catch(() => failed),
+    $.process.run(['rex', 'client', 'ls', '--json']).catch(() => failed),
+    $.process.run(['scutil', '--get', 'ComputerName']).catch(() => failed),
+  ])
+  // A failed call prints nothing to parse, which leaves no label and so counts as local.
+  const label = ownerLabel(view.stdout, clients.stdout, block)
+  const machine = here.stdout.trim()
+
+  return !label || !machine || label === machine ? { kind: 'local' } : { kind: 'remote', session, block, label }
+}
+
+// Opens the file in a split right of Claude's pane, replacing the last viewer split if it is still open.
+async function openViewer($: EngineInterface, place: Extract<Place, { kind: 'remote' }>, argv: string[]) {
+  const last = await read($, viewer)
+  if (last) await $.process.run(['rex', 'block', 'close', '-s', place.session, last]).catch(() => undefined)
+
+  const name = argv[argv.length - 1]?.split('/').pop() ?? ''
+  const ran = await $.process.run(['rex', 'split', '-s', place.session, '-b', place.block, '--split=right',
+    '--label', name, '--json', '--', ...argv]).catch((error: unknown) => ({ exitCode: -1, stdout: '', stderr: String(error) }))
+  let opened = ''
+  try {
+    opened = (JSON.parse(ran.stdout) as { block_ids?: string[] }).block_ids?.[0] ?? ''
+  } catch { /* not JSON: the split failed */ }
+  await update($, viewer, () => opened)
+
+  return ran
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'outputs', description: 'Show files written this session (click to open in your editor)' })
@@ -124,6 +198,16 @@ export const register: Register = (on, options) => {
     const editor = editorArgv(options.editor, '')[0]?.split('/').pop() ?? DEFAULT_EDITOR
 
     const open = async (path: string) => {
+      const place = await placeOf($)
+      if (place.kind === 'remote') {
+        const argv = viewerArgv(options, path)
+        const program = argv[0]?.split('/').pop() ?? ''
+        const { exitCode, stderr } = await openViewer($, place, argv)
+        $.ui.toast(exitCode === 0 ? `${program} → ${shorten(path, cwd, home)} (${place.label})` : `${program} failed: ${stderr.slice(0, 80)}`)
+
+        return
+      }
+
       const argv = editorArgv(options.editor, path)
       const ran = await $.process.run(argv).catch((error: unknown) => ({ exitCode: -1, stderr: String(error) }))
       const { exitCode, stderr } = ran

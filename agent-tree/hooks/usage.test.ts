@@ -16,7 +16,15 @@ describe('addTranscript', () => {
     expect(got.effort).toBe('high')
     expect(got.contextTokens).toBe(2127)
     expect(got.tokens).toBe(1060 + 2127)
-    expect(Math.abs(got.costUsd - (costOf('claude-opus-5-5', u1b) + costOf('claude-opus-5-5', u2)))).toBeLessThan(1e-9)
+    expect(Math.abs((got.costUsd ?? NaN) - (costOf('claude-opus-5-5', u1b) + costOf('claude-opus-5-5', u2)))).toBeLessThan(1e-9)
+  })
+
+  test('the split: cache reads and output summed apart, a repeated message id counted once', () => {
+    const u1 = { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 40, output_tokens: 5 }
+    const u2 = { input_tokens: 20, cache_read_input_tokens: 2000, cache_creation_input_tokens: 100, output_tokens: 7 }
+    const text = [line('m1', 'claude-opus-5-5', u1), line('m1', 'claude-opus-5-5', { ...u1, output_tokens: 50 }), line('m2', 'claude-opus-5-5', u2), ''].join('\n')
+    const got = toUsage(addTranscript(emptyUsage(), text))
+    expect([got.cachedTokens, got.outputTokens, got.window]).toEqual([3000, 57, 0])
   })
 
   test('sidechain lines (in-session subagents) are not this agent', () => {
@@ -52,6 +60,7 @@ describe('paths and formats', () => {
     expect(fmtTokens(950)).toBe('950')
     expect(fmtTokens(12_400)).toBe('12k')
     expect(fmtTokens(3_100_000)).toBe('3.1M')
+    expect(fmtTokens(2_443_000_000)).toBe('2.4B')
     expect(fmtCost(1.234)).toBe('$1.23')
     expect(fmtCost(14.2)).toBe('$14.2')
     expect(fmtTime(65_000)).toBe('1:05')

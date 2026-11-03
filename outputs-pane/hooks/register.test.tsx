@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
 
 import { iconFor } from './icons'
-import { editorArgv, matches, remember, scratchPatterns, sectionOf, shorten, splitPath } from './register'
+import { editorArgv, matches, ownerLabel, remember, scratchPatterns, sectionOf, shorten, splitPath, viewerArgv } from './register'
 
 describe('remember', () => {
   test('newest first, deduped, created files stay new', () => {
@@ -242,5 +243,106 @@ describe('pane', () => {
     await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/p/bad.md', content: '' })
     const ui = await $.ui.mount({ plugin: 'outputs-pane', surface: 'terminal', component: 'Pane', props: {} as never, requestId: 'outputs' })
     expect(await ui.findAll({ type: 'Button', text: 'bad.md' })).toHaveLength(0)
+  })
+})
+
+describe('viewerArgv', () => {
+  test('planning files get the markdown viewer, the rest the code viewer; blank falls back to glow and bat', () => {
+    expect(viewerArgv({}, '/w/plan.md')).toEqual(['glow', '-p', '/w/plan.md'])
+    expect(viewerArgv({}, '/w/main.rs')).toEqual(['bat', '--paging=always', '/w/main.rs'])
+    expect(viewerArgv({ markdownViewer: ' mdcat ', codeViewer: 'nvim -R' }, '/w/notes.txt')).toEqual(['mdcat', '/w/notes.txt'])
+    expect(viewerArgv({ markdownViewer: ' mdcat ', codeViewer: 'nvim -R' }, '/w/main.rs')).toEqual(['nvim', '-R', '/w/main.rs'])
+    expect(viewerArgv({ codeViewer: '' }, '/w/main.rs')).toEqual(['bat', '--paging=always', '/w/main.rs'])
+  })
+})
+
+const VIEW = JSON.stringify({ windows: [{ blocks: [{ block_id: 'block:other', owner: 'client:near' }, { block_id: 'block:me', owner: 'client:far' }] }] })
+const CLIENTS = JSON.stringify({ clients: [{ client_id: 'client:near', info: { label: 'Here' } }, { client_id: 'client:far', info: { label: 'Mac15' } }] })
+
+describe('ownerLabel', () => {
+  test('the label of the app owning the block; unowned, unknown or garbled means none', () => {
+    expect(ownerLabel(VIEW, CLIENTS, 'block:me')).toBe('Mac15')
+    expect(ownerLabel(VIEW, CLIENTS, 'block:other')).toBe('Here')
+    expect(ownerLabel(VIEW, CLIENTS, 'block:gone')).toBeUndefined()
+    expect(ownerLabel(VIEW, JSON.stringify({ clients: [] }), 'block:me')).toBeUndefined()
+    expect(ownerLabel('not json', CLIENTS, 'block:me')).toBeUndefined()
+  })
+})
+
+type Rex = { view?: string; machine?: string; isRexDown?: boolean; inRex?: boolean }
+
+// A pane in a Rex session whose Claude pane (block:me) is owned by the app labelled Mac15.
+const rexPane = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], rex: Rex = {}) => {
+  const ran: string[][] = []
+  let splits = 0
+  const env: Record<string, string> = rex.inRex === false ? {} : { REX_SESSION: 'session:s', REX_BLOCK: 'block:me' }
+  on('tool.call', () => ({ result: 'ok' } as never))
+  on('session.cwd', () => ({ value: '/Users/me/p' }))
+  on('ui.open', () => ({ value: { isPlaced: true } } as never))
+  on('ui.toast', () => ({ value: undefined }))
+  on('env.get', (_$, e) => ({ value: env[e.name] }) as never)
+  on('process.run', (_$, e) => {
+    const argv = [...e.argv]
+    ran.push(argv)
+    const answer = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '' } } as never)
+    if (argv[0] === 'scutil') return answer(`${rex.machine ?? 'Here'}\n`)
+    if (argv[0] !== 'rex') return answer('')
+    if (rex.isRexDown) return answer('', 1)
+    if (argv[1] === 'api') return answer(rex.view ?? VIEW)
+    if (argv[1] === 'client') return answer(CLIENTS)
+    if (argv[1] === 'split') return answer(JSON.stringify({ block_ids: [`block:viewer${++splits}`] }))
+    return answer('')
+  })
+
+  await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/p/docs/plan.md', content: '# p' })
+  await $.tool.call({ tool: 'Write', tool_use_id: 't2', file_path: '/Users/me/p/src/main.rs', content: 'fn main() {}' })
+  const ui = await $.ui.mount({ plugin: 'outputs-pane', surface: 'terminal', component: 'Pane', props: {} as never, requestId: 'outputs' })
+  // What a click ran, without the lookups that decided it.
+  const opened = () => ran.filter(argv => !(argv[0] === 'scutil' || (argv[0] === 'rex' && (argv[1] === 'api' || argv[1] === 'client'))))
+
+  return { ui, opened }
+}
+
+describe('rex', () => {
+  test('a click from another machine opens a viewer split right of Claude, glow for planning and bat for code', async ($, on) => {
+    const { ui, opened } = await rexPane($, on)
+
+    await ui.press({ key: 'open:/Users/me/p/docs/plan.md' })
+    expect(opened()).toEqual([
+      ['rex', 'split', '-s', 'session:s', '-b', 'block:me', '--split=right', '--label', 'plan.md', '--json', '--', 'glow', '-p', '/Users/me/p/docs/plan.md'],
+    ])
+
+    await ui.press({ key: 'open:/Users/me/p/src/main.rs' })
+    expect(opened().slice(1)).toEqual([
+      ['rex', 'block', 'close', '-s', 'session:s', 'block:viewer1'],
+      ['rex', 'split', '-s', 'session:s', '-b', 'block:me', '--split=right', '--label', 'main.rs', '--json', '--', 'bat', '--paging=always', '/Users/me/p/src/main.rs'],
+    ])
+  })
+
+  test('a click from this machine opens the editor', async ($, on) => {
+    const { ui, opened } = await rexPane($, on, { machine: 'Mac15' })
+
+    await ui.press({ key: 'open:/Users/me/p/docs/plan.md' })
+    expect(opened()).toEqual([['zed', '/Users/me/p/docs/plan.md']])
+  })
+
+  test('outside Rex a click opens the editor without asking Rex anything', async ($, on) => {
+    const { ui, opened } = await rexPane($, on, { inRex: false })
+
+    await ui.press({ key: 'open:/Users/me/p/docs/plan.md' })
+    expect(opened()).toEqual([['zed', '/Users/me/p/docs/plan.md']])
+  })
+
+  test('when Rex cannot say who owns the pane, a click opens the editor', async ($, on) => {
+    const unowned = await rexPane($, on, { view: JSON.stringify({ windows: [{ blocks: [{ block_id: 'block:me' }] }] }) })
+    await unowned.ui.press({ key: 'open:/Users/me/p/docs/plan.md' })
+    expect(unowned.opened()).toEqual([['zed', '/Users/me/p/docs/plan.md']])
+  })
+
+  test('when rex fails, a click opens the editor', async ($, on) => {
+    const { ui, opened } = await rexPane($, on, { isRexDown: true })
+
+    await ui.press({ key: 'open:/Users/me/p/docs/plan.md' })
+    expect(opened()).toEqual([['zed', '/Users/me/p/docs/plan.md']])
   })
 })

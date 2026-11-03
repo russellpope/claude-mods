@@ -51,6 +51,24 @@ export const PASSED_GATE = {
   ],
 }
 
+/** A gate run queued behind the running one: newer, no stages yet (shape from a real overview, 2026-10-12). */
+export const QUEUED_GATE = {
+  operation_id: 'bdfa2828-d68e-4ff6-a40e-9d5b0e12737b',
+  project_id: KINTSUGI_ID,
+  project: 'kintsugi',
+  ref_name: 'refs/heads/main',
+  commit: 'f39b29456ca356c253068a93f4aa28577fcfcea3',
+  short_commit: 'f39b294',
+  profile: 'full',
+  state: 'pending',
+  version: '1',
+  created_at_ms: 1791608700000,
+  updated_at_ms: 1791608700000,
+  queue_reason: 'waiting: run a8c231fe-c2fb-4ee8-818b-18d379f673cd active',
+  detail: null,
+  stages: [],
+}
+
 /** A ticket's candidate run, newer than everything else but finished and failed. */
 export const FAILED_TICKET = {
   run_id: 'run-1',
@@ -84,6 +102,53 @@ export const HANSA_GATE = {
   created_at_ms: 1791608600000,
   short_commit: 'aaaaaaa',
 }
+
+/**
+ * `run logs --stage test` of the running gate run, mid-stage: the line shapes of a real log
+ * (2026-10-12): cargo's ok, ignored-with-a-reason and FAILED lines, a long-running notice, the
+ * failures block and summary, and a unittest lane's line. Five tests reported.
+ */
+export const RUNNING_TEST_LOG = `RUN LOGS operation=a8c231fe-c2fb-4ee8-818b-18d379f673cd stage=test
+Availability: available bytes=1693
+cargo build --locked --workspace --bin kintsugi
+
+running 5 tests
+test agent_observer::tests::a_bind_lock_identity_error_names_the_lock_file ... ok
+test attempt_cleanup::tests::deep_cleanup_child ... ignored, run by cleanup_refuses_three_thousand_levels_on_two_megabyte_stack
+test dispatch::personal_tests::native_herdr_tests::i277_native_prompt_screens_refuse_before_paste has been running for over 60 seconds
+test inbox::production_review_tests::i261_socket_local_settings_end_the_review ... FAILED
+test vault::tests::denied_policy_disables_security_user_interaction ... ok
+
+failures:
+
+---- inbox::production_review_tests::i261_socket_local_settings_end_the_review stdout ----
+
+thread 'inbox::production_review_tests::i261_socket_local_settings_end_the_review' (52747977) panicked at crates/kintsugi/src/inbox/production_review_tests.rs:88:5:
+socket path too long for sun_path
+
+failures:
+    inbox::production_review_tests::i261_socket_local_settings_end_the_review
+
+test result: FAILED. 2 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2758.67s
+
+test_command_line_zero_is_overridden (__main__.VerifySkipGateTest.test_command_line_zero_is_overridden) ... ok
+`
+
+/** `run logs --stage test` of the passed gate run: six tests reported, the expected total. */
+export const PASSED_TEST_LOG = `RUN LOGS operation=d109803a-e563-4319-94e2-2a9ded3becba stage=test
+Availability: available bytes=812
+
+running 6 tests
+test agent_observer::tests::a_bind_lock_identity_error_names_the_lock_file ... ok
+test attempt_cleanup::tests::deep_cleanup_child ... ignored, run by cleanup_refuses_three_thousand_levels_on_two_megabyte_stack
+test dispatch::personal_tests::native_herdr_tests::i277_native_prompt_screens_refuse_before_paste ... ok
+test inbox::production_review_tests::i261_socket_local_settings_end_the_review ... ok
+test vault::tests::denied_policy_disables_security_user_interaction ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2750.05s
+
+test_command_line_zero_is_overridden (__main__.VerifySkipGateTest.test_command_line_zero_is_overridden) ... ok
+`
 
 export const overview = (items: object[], operatorRuns: object[]) =>
   JSON.stringify({

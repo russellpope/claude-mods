@@ -43,11 +43,34 @@ export type Snapshot = {
   error: string
 }
 
+/** Per-test results counted from a stage's log. */
+export type TestTally = {
+  passed: number
+  failed: number
+  ignored: number
+  /** Failed tests in log order, as the log names them. */
+  failedNames: string[]
+}
+
+/** The shown run's test count, and the total of the last passed run like it. */
+export type TestsView = {
+  /** The run counted; the pane shows the count only while this run is shown. */
+  runId: string
+  /** null: no log yet, kintsugi failed, the log was cut short, or it held no tests. */
+  tally: TestTally | null
+  /** The test stage had finished when counted, so its count is final. */
+  isFinal: boolean
+  /** The passed run the total came from; empty when there is none. */
+  baseId: string
+  total: number | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'kintsugi-runs': {
       snapshot: Snapshot
       frame: number
+      tests: TestsView
     }
   }
 }

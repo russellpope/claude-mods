@@ -18,8 +18,16 @@ describe('ledger', () => {
 
   test('makeEdge then parseEdge round-trips', () => {
     const e = makeEdge('w9:p1A', 'sess', child, 5)
-    expect(e).toEqual({ v: 1, parent: 'w9:p1A', parentSession: 'sess', child: 'wCK:p8', name: 'udci-i156-impl', via: 'claude-mod', at: 5 })
+    expect(e).toEqual({ v: 1, parent: 'w9:p1A', parentSession: 'sess', child: 'wCK:p8', name: 'udci-i156-impl', via: 'claude-mod', at: 5, session: 'wCK' })
     expect(parseEdge(JSON.stringify(e))).toEqual(e)
+  })
+
+  test('a Rex child on another host keeps its session and server in the edge', () => {
+    const e = makeEdge('block:root', 'sess', { ...child, pane: 'block:c1', workspace: 'session:s9', server: 'linux-box' }, 5)
+    expect(e).toMatchObject({ child: 'block:c1', session: 'session:s9', server: 'linux-box' })
+    expect(parseEdge(JSON.stringify(e))).toEqual(e)
+    // An edge written before these fields reads as it always did.
+    expect(parseEdge('{"v":1,"parent":"a","child":"b","at":1,"server":""}')).not.toHaveProperty('server')
   })
 
   test('parseEdge refuses other versions, missing fields and junk', () => {

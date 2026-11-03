@@ -1,8 +1,11 @@
 {
   "name": "outputs-pane",
-  "version": "0.3.0",
-  "description": "Side pane listing files Claude writes or edits, split into planning, code and scratch, with a filter; click one to open it in your editor",
-  "author": { "name": "Russell Pope", "url": "https://github.com/russellpope" },
+  "version": "0.4.0",
+  "description": "Side pane listing files Claude writes or edits, split into planning, code and scratch, with a filter; click one to open it in your editor, or in a viewer split when you're in Rex on another machine",
+  "author": {
+    "name": "Russell Pope",
+    "url": "https://github.com/russellpope"
+  },
   "homepage": "https://github.com/russellpope/claude-mods/tree/main/outputs-pane",
   "repository": "https://github.com/russellpope/claude-mods",
   "license": "Apache-2.0",
@@ -19,6 +22,18 @@
       "title": "Scratch patterns",
       "description": "File names that go in the folded scratch section: comma-separated globs, * and ? as wildcards (e.g. msg-*, *.log); blank for none",
       "default": "msg-*"
+    },
+    "markdownViewer": {
+      "type": "string",
+      "title": "Remote markdown viewer",
+      "description": "In Rex on another machine, command that shows a clicked planning file in a split; the path is added as the last argument (e.g. glow -p, mdcat --paging)",
+      "default": "glow -p"
+    },
+    "codeViewer": {
+      "type": "string",
+      "title": "Remote code viewer",
+      "description": "In Rex on another machine, command that shows a clicked code file in a split; the path is added as the last argument (e.g. bat --paging=always, nvim -R)",
+      "default": "bat --paging=always"
     }
   }
 }

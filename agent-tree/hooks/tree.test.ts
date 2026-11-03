@@ -75,7 +75,7 @@ describe('buildTree', () => {
 
   test('a pane closed since: gone, keeping its last numbers', () => {
     const e = edge('R', 'L', 1)
-    const prev = build([e], [ag('L', { title: 'BLOCKED: x' })]).nodes.map(n => ({ ...n, usage: { model: 'claude-opus-5-5', effort: 'high', contextTokens: 9, tokens: 99, costUsd: 1.5 }, lastSeen: 500 }))
+    const prev = build([e], [ag('L', { title: 'BLOCKED: x' })]).nodes.map(n => ({ ...n, usage: { model: 'claude-opus-5-5', effort: 'high', contextTokens: 9, window: 0, tokens: 99, cachedTokens: 0, outputTokens: 0, costUsd: 1.5 }, lastSeen: 500 }))
     const { nodes } = build([e], [], { [edgeFileName(e)]: 't-L' }, prev)
     expect(nodes[0]).toMatchObject({ pane: 'L', status: 'gone', title: 'BLOCKED: x', lastSeen: 500, usage: { costUsd: 1.5 } })
   })

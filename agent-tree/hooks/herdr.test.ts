@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted } from './herdr'
+import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted, parseTabList } from './herdr'
 
 const raw = (pane: string, extra: Record<string, unknown> = {}) => ({
   pane_id: pane,
@@ -17,10 +17,18 @@ const raw = (pane: string, extra: Record<string, unknown> = {}) => ({
 
 describe('parseAgentList', () => {
   test('maps herdr fields and drops rows with no pane', () => {
-    const out = JSON.stringify({ id: 'cli:agent:list', result: { type: 'agent_list', agents: [raw('w1:p1', { title: 'DONE: x' }), { name: 'x' }] } })
+    const out = JSON.stringify({ id: 'cli:agent:list', result: { type: 'agent_list', agents: [raw('w1:p1', { title: 'DONE: x', tab_id: 'w1:t3' }), { name: 'x' }] } })
     expect(parseAgentList(out)).toEqual([
-      { pane: 'w1:p1', name: 'n-w1:p1', harness: 'claude', status: 'working', title: 'DONE: x', label: 'Doing things', cwd: '/w', workspace: 'w1', session: 's-w1:p1', terminal: 'term-w1:p1' },
+      { pane: 'w1:p1', name: 'n-w1:p1', harness: 'claude', status: 'working', title: 'DONE: x', label: 'Doing things', cwd: '/w', workspace: 'w1', session: 's-w1:p1', terminal: 'term-w1:p1', tab: 'w1:t3' },
     ])
+  })
+})
+
+describe('parseTabList', () => {
+  test("`herdr tab list` stdout → each tab's label by its id; anything else → none", () => {
+    const out = JSON.stringify({ id: 'cli:tab:list', result: { tabs: [{ tab_id: 'w9:t19', label: 'mods', workspace_id: 'w9' }, { tab_id: 'w9:tR', label: 'kintsugi: driver | kintsugi' }, { label: 'no id' }] } })
+    expect(parseTabList(out)).toEqual({ 'w9:t19': 'mods', 'w9:tR': 'kintsugi: driver | kintsugi' })
+    expect(parseTabList('not json')).toEqual({})
   })
 
   test('an unknown status becomes unknown; a missing session is blank', () => {
