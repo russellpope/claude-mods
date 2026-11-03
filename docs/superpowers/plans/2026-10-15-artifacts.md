@@ -1,5 +1,7 @@
 # artifacts Implementation Plan
 
+> **Superseded in part:** the spec as amended in f0eb2e3 and on 2026-11-03 is the authority where they differ. It covers the command name (`/artifacts-pane`, since Claude Code has a built-in `/artifacts`), the width source, and the separate `postError` line.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Claude Code mod, `artifacts/`. Its tools let Claude post designs, plans and diagrams to a pane, and each project keeps a versioned history in `~/.claude/artifacts/<project>/`.

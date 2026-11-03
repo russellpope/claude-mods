@@ -1,6 +1,6 @@
 # artifacts: design
 
-Date: 2026-10-15. Status: approved in brainstorming, pending spec review. Amended 2026-10-15 in execution, from the live check and the final review: the command's name, the reader's width source, how a version is kept, unreadable files, and how long a write error shows.
+Date: 2026-10-15. Status: approved, built, and reviewed twice. Amended 2026-10-15 in execution, from the live check and the final review: the command's name, the reader's width source, how a version is kept, unreadable files, and how long a write error shows. Amended 2026-11-03 from the second review: what `/artifacts-pane` opens after a refused post, how a post estimates the terminal width, the reader's 5 s update, and the kinds.
 
 ## Goal
 
@@ -20,8 +20,8 @@ Success: in a kintsugi session, after Claude designs something, the pane opens o
 | Project | `$.session.repo().root`, which for a worktree is "the main working tree's", so every worktree and session of a repo shares one history. Outside a repo, `$.session.root()`. The folder name is the root's base name plus an 8-hex-digit hash of the whole path (`kintsugi-1a2b3c4d`), so two repos with the same name stay apart. |
 | Versions | `show` with the `id` of an earlier artifact adds a version. The latest is the artifact's file; earlier versions are kept beside it. |
 | Keep in repo | A reader button copies the latest version to `docs/artifacts/<id>.md` in the session's own checkout (`$.session.root()`). It never commits. |
-| Opening | Every `show` opens the pane on the new artifact. The engine refuses a plugin's own open "below 144 terminal columns, 110 once they asked for that id". When it does, a toast says `posted <title> · /artifacts-pane`. The refused pane waits undrawn (`ui.panes` lists it with `isPlaced: false`), and `/artifacts-pane` opens it. |
-| Reading width | The reader asks the dock for half the terminal's width, at most 100 columns (`ui.open({ columns })`). `/artifacts-pane` takes the width from its own `presentation.columns`, the terminal's. A post takes it from the last render's `viewport.columns`, which beside another docked pane is the transcript's width, so it asks for a little less; before any render it asks for nothing. On the owner's 140-column session that is 70, leaving the transcript 70. A width the owner dragged the dock to wins, and Claude Code keeps it across sessions (`dockColumns`). |
+| Opening | Every `show` opens the pane on the new artifact. The engine refuses a plugin's own open "below 144 terminal columns, 110 once they asked for that id". When it does, a toast says `posted <title> · /artifacts-pane`. The refused pane waits undrawn (`ui.panes` lists it with `isPlaced: false`), and `/artifacts-pane` opens it on the post, in the reader. Opened from closed, `/artifacts-pane` shows the list. |
+| Reading width | The reader asks the dock for half the terminal's width, at most 100 columns (`ui.open({ columns })`). `/artifacts-pane` takes the width from its own `presentation.columns`, the terminal's. A post takes the last width measured: the command's, or a render's estimate. Inline, a render's `viewport.columns` is the terminal's. Docked, it is the transcript's, so the estimate adds the pane's `bodyColumns` and its one-cell frame. Before either, a post asks for nothing. On the owner's 140-column session that is 70, leaving the transcript 70. A width the owner dragged the dock to wins, and Claude Code keeps it across sessions (`dockColumns`). |
 | Editor | An `editor` setting, as in outputs-pane: a command line with the path added last, default `zed`. |
 
 ## Storage
@@ -52,7 +52,7 @@ Success: in a kintsugi session, after Claude designs something, the pane opens o
   ---
   ```
 
-  `kind` is free text; the tool's description suggests design, plan, diagram, comparison, summary and notes. `branch` is the session checkout's current branch (`git branch --show-current`), empty when that fails or HEAD is detached.
+  `kind` is free text; the tool's description suggests design, plan, diagram, comparison, summary, notes and exploration (the explore drawer's kind). `branch` is the session checkout's current branch (`git branch --show-current`), empty when that fails or HEAD is detached.
 
 ## Tools
 
@@ -104,7 +104,7 @@ diagram · v2 of 2 · 2m ago · artifacts
 - **open** runs the editor on that version's file.
 - **keep in repo** copies the latest version, and a toast confirms it with the path, or reports the error.
 
-**Updates**: the pane reads the project folder when it opens, after each `show` in this session, and every 5 s while it is open, so posts from other sessions of the repo appear.
+**Updates**: the pane reads the project folder when it opens, after each `show` in this session, and every 5 s while it is open, so posts from other sessions of the repo appear. The reader picks up a version another session adds: its `of N` and version buttons count it, and the version on screen stays.
 
 ## Errors
 
@@ -127,7 +127,8 @@ Test first with the mods test kit (`claude plugin test`), with `fs`, `process`, 
   - Outside a repo, the folder is keyed by `root()`.
 - **Pane**:
   - List order, the session marker and the filter.
-  - The reader's header and versions, with narrow docks dropping words in order.
+  - The reader's header and versions.
+  - The list in narrow docks, dropping words in order.
   - Keep in repo writes `docs/artifacts/<id>.md` under `root()`.
   - A refused open shows a toast.
 - A deliberate breakage of each guard, to prove a test fails without it.

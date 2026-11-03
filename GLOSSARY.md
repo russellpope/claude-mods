@@ -5,7 +5,7 @@ Mods that extend the Claude Code terminal UI: panes, the drawer above the prompt
 ## Artifacts
 
 **Artifact**:
-A titled piece of work Claude posts for the owner to keep: a design, plan, diagram, comparison, summary or exploration.
+A titled piece of work Claude posts for the owner to keep: a design, plan, diagram, comparison, summary, notes or exploration.
 _Avoid_: output, document, note
 
 **Output**:

@@ -39,27 +39,37 @@ export const editorArgv = (setting: unknown, path: string): string[] => {
 
 // True from the moment this session opens the pane until ui.panes says it is gone.
 let mayBeOpen = false
-
-/** Whether the pane is drawn where the person sees it: placed, its tab shown. One waiting undrawn (an unasked open on a narrow terminal) is not. */
-async function isPaneShown($: EngineInterface): Promise<boolean> {
-  if (!mayBeOpen) return false
-  const p = (await $.ui.panes()).find(x => x.id === PANE)
-  mayBeOpen = Boolean(p)
-  return Boolean(p?.isPlaced && p.isShown)
-}
-
-// The width the last render reported; 0 before one has. Beside a docked pane it is the transcript's, not the terminal's.
-let viewportColumns = 0
+// Opens not yet answered: until ui.open answers, ui.panes may not list the pane, so a poll then can't clear the flag.
+let opening = 0
 
 /**
- * Opens the pane, asking the dock for half the terminal (at most 100) once a width is known:
- * `terminalColumns` when the caller measured it (a command's presentation), else the last render's.
+ * Where the pane is: `shown` (placed, its tab shown), `undrawn` (listed but waiting, as an unasked open on a
+ * narrow terminal does), or `none`.
  */
-export async function openPane($: EngineInterface, terminalColumns?: number) {
+async function paneState($: EngineInterface): Promise<'none' | 'undrawn' | 'shown'> {
+  if (!mayBeOpen) return 'none'
+  const p = (await $.ui.panes()).find(x => x.id === PANE)
+  if (!opening) mayBeOpen = Boolean(p)
+  return !p ? 'none' : p.isPlaced && p.isShown ? 'shown' : 'undrawn'
+}
+
+const isPaneShown = async ($: EngineInterface) => (await paneState($)) === 'shown'
+
+// A docked pane's frame, in cells, beside its body.
+const DOCK_FRAME = 1
+// The terminal's width as last measured: exact from a command's presentation, else estimated from a render. 0 before either.
+let terminalColumns = 0
+
+/** Opens the pane, asking the dock for half the terminal (at most 100) once its width is known. */
+export async function openPane($: EngineInterface) {
   mayBeOpen = true
-  const width = terminalColumns || viewportColumns
-  const columns = width ? Math.min(100, Math.floor(width / 2)) : undefined
-  return $.ui.open({ id: PANE, title: TITLE, ...(columns ? { columns } : {}) })
+  const columns = terminalColumns ? Math.min(100, Math.floor(terminalColumns / 2)) : undefined
+  opening++
+  try {
+    return await $.ui.open({ id: PANE, title: TITLE, ...(columns ? { columns } : {}) })
+  } finally {
+    opening--
+  }
 }
 
 /** Reads the history into the atom; a failure is kept as the pane's error line. */
@@ -68,7 +78,8 @@ export async function refresh($: EngineInterface): Promise<HistoryView> {
     const { dir, project } = await historyDir($)
     const items = await readHistory($, dir)
     // A failed post's error stays until the next post: a read that works says nothing about the write.
-    return await update($, history, h => ({ dir, project, items, error: '', postError: h.postError }))
+    // `?? ''`: a history saved by a build before postError existed has none.
+    return await update($, history, h => ({ dir, project, items, error: '', postError: h.postError ?? '' }))
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     await update($, history, h => ({ ...h, error }))
@@ -82,6 +93,13 @@ export async function openReader($: EngineInterface, id: string, version?: numbe
   const s = await readArtifact($, dir, id, version)
   await update($, shown, () => s)
   await update($, pane, () => ({ view: 'reader', id }) as PaneView)
+}
+
+/** A version another session added shows in the reader's count and buttons; the version on screen stays. */
+async function catchUpReader($: EngineInterface, items: HistoryView['items']) {
+  const s = await read($, shown)
+  const now = s && items.find(a => a.id === s.meta.id)
+  if (now && now.version > s.latest) await update($, shown, prev => (prev ? { ...prev, latest: now.version } : prev))
 }
 
 export const register: Register = (on, options) => {
@@ -114,27 +132,31 @@ export const register: Register = (on, options) => {
         },
       },
     })
-    // Claude Code has a built-in /artifacts, and refuses a plugin command by that name.
-    await $.command.register({ name: COMMAND, description: 'Show or hide the designs, plans and diagrams posted for this project' })
     // A resumed session may still have the pane open: the poll finds out.
     mayBeOpen = true
     await isPaneShown($).catch(() => false)
     $.clock.every(POLL_MS, () => {
       void (async () => {
-        if (await isPaneShown($)) await refresh($)
+        if (await isPaneShown($)) await catchUpReader($, (await refresh($)).items)
       })().catch(() => undefined)
     })
+    // Last, after the timer: a refused registration throws, and must not stop the poll.
+    // Claude Code has a built-in /artifacts, and refuses a plugin command by that name.
+    await $.command.register({ name: COMMAND, description: 'Show or hide the designs, plans and diagrams posted for this project' })
     return started
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => {
     mayBeOpen = true
-    if (await isPaneShown($)) {
+    if (e.presentation?.columns) terminalColumns = e.presentation.columns
+    const state = await paneState($)
+    if (state === 'shown') {
       await $.ui.close({ id: PANE })
       return { text: 'artifacts closed.' }
     }
-    await update($, pane, () => ({ view: 'list' }) as PaneView)
-    await openPane($, e.presentation?.columns)
+    // A pane waiting undrawn shows what the post set, the reader on it; a closed one opens on the list.
+    if (state === 'none') await update($, pane, () => ({ view: 'list' }) as PaneView)
+    await openPane($)
     await refresh($)
     return { text: 'artifacts opened.' }
   })
@@ -148,7 +170,7 @@ export const register: Register = (on, options) => {
       await update($, history, h => ({ ...h, postError: '' }))
       await update($, mine, ids => (ids.includes(meta.id) ? ids : [...ids, meta.id]))
       await refresh($)
-      await openReader($, meta.id)
+      await openReader($, meta.id).catch(() => undefined)
       const placed = await openPane($).catch(() => ({ isPlaced: false as const }))
       if (!placed.isPlaced) $.ui.toast(`posted ${meta.title} · /${COMMAND}`)
       return { result: `posted ${meta.id} v${meta.version} · ${tilde(`${dir}/${meta.id}.md`, home)}` }
@@ -171,7 +193,8 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    if (e.viewport?.columns) viewportColumns = e.viewport.columns
+    // Docked, the viewport is the transcript beside the pane: the terminal is that, the pane's body and its frame.
+    if (e.viewport?.columns) terminalColumns = e.props.placement === 'dock' ? e.viewport.columns + e.props.bodyColumns + DOCK_FRAME : e.viewport.columns
     const h = await read($, history)
     const sNow = await read($, shown)
     const editorName = editorArgv(options.editor, '')[0]?.split('/').pop() ?? DEFAULT_EDITOR

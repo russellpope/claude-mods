@@ -43,7 +43,7 @@ const disk = (on: On, files: Files, failWrites = false, unreadable: ReadonlySet<
 }
 
 /** A session in a worktree of kintsugi, on branch `artifacts`, at NOW; returns the toasts it shows, the commands it runs and the opens it asks. */
-const session = (on: On, opts: { home?: string | null; repo?: string | null; placed?: boolean; waitsUndrawn?: boolean; clock?: boolean } = {}) => {
+const session = (on: On, opts: { home?: string | null; repo?: string | null; placed?: boolean; waitsUndrawn?: boolean; clock?: boolean; commandFails?: boolean; openGate?: { wait?: Promise<void> } } = {}) => {
   mock.env(on, opts.home === null ? {} : { HOME: opts.home ?? HOME })
   // A test driving mock.clock passes clock: false, so this hook doesn't answer clock.now beneath it.
   if (opts.clock !== false) on('clock.now', async () => ({ value: NOW }))
@@ -61,6 +61,8 @@ const session = (on: On, opts: { home?: string | null; repo?: string | null; pla
   const opens: { columns?: number }[] = []
   on('ui.open', async (_$, e) => {
     opens.push({ columns: e.columns })
+    // The engine records the open only when it answers: until the gate opens, ui.panes doesn't list it.
+    if (opts.openGate?.wait) await opts.openGate.wait
     if (opts.placed === false || (opts.waitsUndrawn && pane === 'none')) {
       pane = 'undrawn'
       return { value: { isPlaced: false, reason: 'narrow' } }
@@ -86,6 +88,7 @@ const session = (on: On, opts: { home?: string | null; repo?: string | null; pla
     return { value: { tool: `mcp__artifacts__${e.name}` } }
   })
   on('command.register', async (_$, e) => {
+    if (opts.commandFails) return { deny: `"/${e.name}" refused` }
     registered.commands.push(e.name)
     return { value: { command: e.name } }
   })
@@ -414,6 +417,58 @@ describe('refreshing', () => {
   })
 })
 
+describe('refreshing, races and order', () => {
+  test('a poll during an open in flight does not stop the refresh', async ($, on) => {
+    const clock = mock.clock(on)
+    const io = disk(on, new Map())
+    const gate: { wait?: Promise<void> } = {}
+    session(on, { clock: false, openGate: gate })
+    await start($)
+    await show($, { title: 'T', body: 'x' }) // something in the folder to read
+    await toggle($) // closes the reader the post opened
+    let release = () => {}
+    gate.wait = new Promise<void>(resolve => (release = resolve))
+    const opening = toggle($)
+    await clock.advance(5_000) // a tick while ui.open has not answered
+    release()
+    await opening
+    io.lists = 0
+    await clock.advance(10_000)
+    expect(io.lists).toBe(2)
+  })
+
+  test('a command registration that fails still leaves the 5 s refresh running', async ($, on) => {
+    const clock = mock.clock(on)
+    const io = disk(on, new Map())
+    session(on, { clock: false, commandFails: true })
+    await start($).catch(() => undefined)
+    await show($, { title: 'T', body: 'x' })
+    io.lists = 0
+    await clock.advance(10_000)
+    expect(io.lists).toBe(2)
+  })
+
+  test("the reader learns of a version another session adds: 'of N' and its button", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const files: Files = new Map()
+    disk(on, files)
+    session(on, { clock: false })
+    await start($)
+    await show($, { title: 'Auth flow', body: 'one' })
+    const dir = folder(files)
+    const latest = `${dir}/2026-10-15-auth-flow.md`
+    const v1 = files.get(latest)?.text ?? ''
+    files.set(`${dir}/.versions/2026-10-15-auth-flow/v1.md`, { text: v1, mtimeMs: NOW })
+    files.set(latest, { text: v1.replace('\nversion: 1\n', '\nversion: 2\n').replace('\n\none\n', '\n\ntwo\n'), mtimeMs: NOW + 1000 })
+    await clock.advance(5_000)
+    await clock.settle()
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'meta' }))?.text).toMatch(/^notes · v1 of 2 · /)
+    expect(await ui.find({ key: 'version-2' })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
 describe('the reader', () => {
   const posted = async ($: E, on: On, opts: { placed?: boolean; waitsUndrawn?: boolean } = {}) => {
     const files: Files = new Map()
@@ -480,7 +535,8 @@ describe('the reader', () => {
   test('the reader asks the dock for half the terminal, at most 100', async ($, on) => {
     const { opens } = await posted($, on)
     await show($, { title: 'A', body: 'x' })
-    const ui = await mount($) // a render reports viewport.columns 140
+    // Inline, a render's viewport is the terminal's: 140.
+    const ui = await $.ui.mount({ plugin: 'artifacts', surface: 'terminal', component: 'Pane', requestId: 'artifacts', props: { ...PANE_PROPS(136), placement: 'inline' as const }, viewport: { columns: 140, rows: 50 } })
     await show($, { title: 'B', body: 'y' })
     expect(opens.map(o => o.columns)).toEqual([undefined, 70])
     await ui.unmount()
@@ -508,5 +564,35 @@ describe('the reader', () => {
     const { toasts } = await posted($, on, { placed: false })
     await show($, { title: 'Auth flow', body: 'x' })
     expect(toasts.at(-1)).toBe('posted Auth flow · /artifacts-pane')
+  })
+
+  test('after a post that waits undrawn, /artifacts-pane shows that post, not the list', async ($, on) => {
+    await posted($, on, { waitsUndrawn: true })
+    await show($, { title: 'Auth flow', body: 'x' })
+    await toggle($)
+    const ui = await mount($)
+    expect((await ui.find({ type: 'Box', key: 'title' }))?.text).toBe('Auth flow')
+    await ui.unmount()
+  })
+
+  test('docked, a post asks for half the terminal: the transcript beside the pane, plus the pane', async ($, on) => {
+    const { opens } = await posted($, on)
+    await show($, { title: 'A', body: 'x' })
+    // A 140-column terminal: the transcript has 70, the docked pane's body 69, its frame 1.
+    const ui = await $.ui.mount({ plugin: 'artifacts', surface: 'terminal', component: 'Pane', requestId: 'artifacts', props: PANE_PROPS(69), viewport: { columns: 70, rows: 50 } })
+    await show($, { title: 'B', body: 'y' })
+    expect(opens.map(o => o.columns)).toEqual([undefined, 70])
+    await ui.unmount()
+  })
+
+  test('a post whose reader fails to open is still posted, not refused', async ($, on) => {
+    const files: Files = new Map()
+    // The file is written, then can't be read back for the reader.
+    disk(on, files, false, { has: (path: string) => path.endsWith('/2026-10-15-auth-flow.md') } as ReadonlySet<string>)
+    session(on)
+    await start($)
+    const r = await show($, { title: 'Auth flow', body: 'x' })
+    expect(r.deny).toBeUndefined()
+    expect(r.result).toMatch(/^posted 2026-10-15-auth-flow v1 · /)
   })
 })
