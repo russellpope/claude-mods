@@ -75,10 +75,22 @@ export function matchProject(projects: EnrolledProject[], root: string): Project
 const ACTIVE = new Set(['pending', 'running', 'quota_paused', 'uncertain'])
 export const isActive = (state: string): boolean => ACTIVE.has(state)
 
-/** The run the tab shows: the newest active one, else the newest, so the last result stays in view. */
+const newestFirst = (runs: Run[], projectId: string | null): Run[] =>
+  (projectId ? runs.filter(r => r.projectId === projectId) : runs).slice().sort((a, b) => b.createdAt - a.createdAt)
+
+/**
+ * The run the tab shows: the newest one under way, else the newest queued one, else the newest,
+ * so the last result stays in view. A run queued behind another never hides it.
+ */
 export function currentRun(runs: Run[], projectId: string | null): Run | null {
-  const scope = (projectId ? runs.filter(r => r.projectId === projectId) : runs).slice().sort((a, b) => b.createdAt - a.createdAt)
-  return scope.find(r => isActive(r.state)) ?? scope[0] ?? null
+  const scope = newestFirst(runs, projectId)
+  return scope.find(r => isActive(r.state) && r.state !== 'pending') ?? scope.find(r => r.state === 'pending') ?? scope[0] ?? null
+}
+
+/** How many runs wait queued behind the one shown; 0 when it is queued itself. */
+export function queuedBehind(runs: Run[], projectId: string | null, shown: Run | null): number {
+  if (!shown || shown.state === 'pending') return 0
+  return newestFirst(runs, projectId).filter(r => r.state === 'pending' && r.id !== shown.id).length
 }
 
 export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
@@ -207,15 +219,23 @@ const INDENT = 2
 const STATE_W = 11 // a glyph, a space and 'uncertain'
 const EXIT_W = 4
 const TIME_W = 6 // '11m23s'
+const GLYPH_W = 1
+const MIN_STAGE = 3
 const MIN_TIMING = 8
 
 const stageWidth = (stages: Stage[]): number => Math.max(5, ...stages.map(s => s.name.length))
 
-/** Column widths for the jobs table; exit is 0, dropped, when the row would not fit. */
+/**
+ * Column widths for the jobs table. As the pane narrows, the exit column goes (exit 0), then
+ * the state word (state 1: the glyph alone), then stage names shorten; the time always stays.
+ */
 export function columns(cols: number, stages: Stage[]): { state: number; stage: number; exit: number; time: number } {
   const stage = stageWidth(stages)
-  const fixed = INDENT + STATE_W + 1 + stage + 1 + EXIT_W + 1 + TIME_W
-  return { state: STATE_W, stage, exit: fixed > cols ? 0 : EXIT_W, time: TIME_W }
+  const row = (state: number, stage: number, exit: number) => INDENT + state + 1 + stage + 1 + (exit ? exit + 1 : 0) + TIME_W
+  if (row(STATE_W, stage, EXIT_W) <= cols) return { state: STATE_W, stage, exit: EXIT_W, time: TIME_W }
+  if (row(STATE_W, stage, 0) <= cols) return { state: STATE_W, stage, exit: 0, time: TIME_W }
+  const room = cols - row(GLYPH_W, 0, 0)
+  return { state: GLYPH_W, stage: Math.max(MIN_STAGE, Math.min(stage, room)), exit: 0, time: TIME_W }
 }
 
 /** The timing track: the panel width beside the stage names, the whole run spread across it; 0 when too narrow. */

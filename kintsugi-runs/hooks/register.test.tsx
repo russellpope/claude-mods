@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
 import type { Snapshot } from '../types'
-import { FAILED_TICKET, HANSA_GATE, NOW, PASSED_GATE, PROJECTS, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
+import { FAILED_TICKET, HANSA_GATE, NOW, PASSED_GATE, PROJECTS, QUEUED_GATE, RUNNING_GATE, UNAVAILABLE, overview } from './fixtures'
 
 type On = Parameters<TestBody>[1]
 type E = Parameters<TestBody>[0]
@@ -183,6 +183,19 @@ describe('pane', () => {
     await ui.unmount()
   })
 
+  test('a run queued behind the running one: the running run shows, the queue counted under its header', async ($, on) => {
+    on('clock.now', async () => ({ value: NOW }))
+    host(on, { overview: () => overview([], [QUEUED_GATE, RUNNING_GATE, PASSED_GATE]) })
+    await setup(on).open($)
+    const ui = await mount($)
+    expect(await ui.find({ type: 'Text', text: /^verify full · main · eb598c9$/ })).toBeDefined()
+    // Two pieces in a wrapping row, so a narrow pane breaks between them, not mid-phrase.
+    expect((await ui.find({ type: 'Box', key: 'since' }))?.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 })
+    expect((await ui.find({ type: 'Box', key: 'since-age' }))?.text).toBe('started 1h ago ·')
+    expect((await ui.find({ type: 'Box', key: 'since-queue' }))?.text).toBe('1 queued behind it')
+    await ui.unmount()
+  })
+
   test('only the active run: no recent list, nothing to pin', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})
@@ -194,7 +207,7 @@ describe('pane', () => {
     await ui.unmount()
   })
 
-  test('a narrow pane drops exit codes, then the timing section', async ($, on) => {
+  test('a narrow pane drops exit codes, then state words, then the timing section', async ($, on) => {
     on('clock.now', async () => ({ value: NOW }))
     host(on, {})
     await setup(on).open($)
@@ -203,8 +216,13 @@ describe('pane', () => {
     expect(await mid.find({ type: 'Box', key: 'bar-test' })).toBeDefined()
     await mid.unmount()
     const narrow = await mount($, 34)
-    expect((await narrow.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/check\s*38s/)
+    expect((await narrow.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/passed\s*check\s*38s/)
     await narrow.unmount()
+    // Too narrow for the state word: its coloured glyph stays, and so does the time.
+    const slim = await mount($, 24)
+    expect((await slim.find({ type: 'Box', key: 'job-test' }))?.text).toMatch(/^⠋\s*test\s*1h01m$/)
+    expect((await slim.find({ type: 'Box', key: 'job-check' }))?.text).toMatch(/^✓\s*check\s*38s$/)
+    await slim.unmount()
     const tiny = await mount($, 17)
     expect(await tiny.find({ type: 'Text', text: /^Timing$/ })).toBeUndefined()
     await tiny.unmount()

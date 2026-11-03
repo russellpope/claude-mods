@@ -2,9 +2,9 @@
 
 A pane for kintsugi users: the verification run of the repo this Claude session is in, with its stage pipeline, each stage's state, exit and time, and a timing bar. `/kintsugi-runs` toggles it.
 
-- **Which run**: the newest queued or running run of this repo, else the newest finished one, so the last result stays in view. Ticket runs and operator gate runs (`kintsugi land`) both count. A session outside an enrolled repo shows every project's runs.
+- **Which run**: the newest run of this repo that is under way, else the newest queued one, else the newest finished one, so the last result stays in view. A run queued behind the shown one never hides it; the line under the header counts the queue (`started 1h ago · 1 queued behind it`). Ticket runs and operator gate runs (`kintsugi land`) both count. A session outside an enrolled repo shows every project's runs.
 - **Pipeline**: `✓ fmt → ✓ check → ✓ lint → ⠧ test → ○ skip-gate`. In a narrow pane it wraps between whole stages.
-- **Jobs table**: each stage's state, exit code and time; the exit column drops first when the pane is narrow.
+- **Jobs table**: each stage's state, exit code and time. As the pane narrows, the exit column goes first, then the state word (its coloured glyph stays), then stage names shorten. The time always stays.
 - **Timing**: while a long stage runs, finished stages share the left half at their true proportions, and the running stage fills the right half against its usual length (the median of that stage in this repo's passed runs of the same kind). Past it, the heading says by how much. A finished run is drawn at true scale. The section hides when the pane is too narrow.
 - **Spinner**: turns while a stage runs. Set `motion` to `off` to keep it still.
 
