@@ -156,8 +156,11 @@ export const invokesRexSpawn = (command: string): boolean => REX_SPAWN.test(comm
 /**
  * True when the command names an agent harness: a block it printed is then recorded even before
  * its agent shows. Quoted text counts: Rex takes the command to run as words, often a quoted `sh -c`.
+ * The name must be a whole word, alone or at the end of a path: `claude-mods`, `~/.claude/` and
+ * `claude.md` are files, not a harness.
  */
-export const namesHarness = (command: string): boolean => /\b(?:claude|codex|opencode)\b/.test(command)
+export const namesHarness = (command: string): boolean =>
+  /(?:^|[\s"'=;&|(`])(?:[^\s"';&|()]*\/)?(?:claude|codex|opencode)(?=$|[\s"';&|)`])/.test(command)
 
 /** Every block a `rex run|split|new|window new` printed: `block_ids` in its JSON, or a bare id on a line. */
 export const parseRexStarted = (stdout: string): string[] => {
