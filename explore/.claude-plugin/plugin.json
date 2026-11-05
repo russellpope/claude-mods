@@ -1,0 +1,10 @@
+{
+  "name": "explore",
+  "version": "0.1.0",
+  "description": "A drawer above the prompt that explores one question of a grilling round in a side fork, and takes the conclusion back into your reply",
+  "author": { "name": "Russell Pope", "url": "https://github.com/russellpope" },
+  "homepage": "https://github.com/russellpope/claude-mods/tree/main/explore",
+  "repository": "https://github.com/russellpope/claude-mods",
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts"
+}

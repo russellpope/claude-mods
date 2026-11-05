@@ -2,7 +2,7 @@
 
 Mods for [Claude Code](https://claude.com/claude-code): panes, status entries and hooks that run inside the Claude Code terminal UI. Each mod is a folder at the top of this repo, with its own README.
 
-> Mods use Claude Code's function-hooks plugin API, which is in early access and may change between releases. These were built and tested on Claude Code 2.1.288.
+> Mods use Claude Code's function-hooks plugin API, which is in early access and may change between releases. These were built on Claude Code 2.1.288 and tested on 2.1.318 (2026-11-05). explore requires 2.1.318 or later.
 
 ## Mods
 
@@ -12,6 +12,7 @@ Mods for [Claude Code](https://claude.com/claude-code): panes, status entries an
 | [agent-tree](agent-tree/) | Pane of the herdr agents this session spawned, and theirs: status, model, context, cost and ticket, with a global view and a crab. `/agent-tree` toggles it. |
 | [kintsugi-runs](kintsugi-runs/) | Pane of this repo's kintsugi verification run: the stage pipeline, each stage's state, exit and time, and a timing bar that measures a long stage against its usual length. `/kintsugi-runs` toggles it. |
 | [artifacts](artifacts/) | Pane of the designs, plans and diagrams Claude posts with its `show` tool, and each project's history of them in `~/.claude/artifacts/`, with versions and a "keep in repo" button. `/artifacts-pane` toggles it. |
+| [explore](explore/) | Drawer above the prompt for one question of a grilling round: its options in a side fork of the conversation, follow-ups, and a `take` button that puts your pick into your reply. A hint button after a round opens it without touching your draft; `/explore 5` opens Q5. |
 
 ## Installing a mod
 
