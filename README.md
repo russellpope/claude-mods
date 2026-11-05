@@ -2,7 +2,7 @@
 
 Mods for [Claude Code](https://claude.com/claude-code): panes, status entries and hooks that run inside the Claude Code terminal UI. Each mod is a folder at the top of this repo, with its own README.
 
-> Mods use Claude Code's function-hooks plugin API, which is in early access and may change between releases. These were built and tested on Claude Code 2.1.288.
+> Mods use Claude Code's function-hooks plugin API, which is in early access and may change between releases. These were built on Claude Code 2.1.288 and tested on 2.1.318 (2026-11-05). explore requires 2.1.318 or later.
 
 ## Mods
 
