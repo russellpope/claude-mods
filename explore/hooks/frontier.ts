@@ -8,7 +8,8 @@ export type Frontier =
   | { kind: 'unlisted'; text: string; ago: number }
 
 // `❓ **Q<n>** - **<title>**: <body>`, at the start of a line only: a body may quote the format.
-const START = /^❓️?\s*\*\*Q(\d+)\*\*\s*[-–—]\s*\*\*(.+?)\*\*:\s*(.*)$/u
+// The colon may be missing or inside the bold: a small model drifts from the format.
+const START = /^❓️?\s*\*\*Q(\d+)\*\*\s*[-–—]\s*\*\*(.+?):?\*\*:?\s*(.*)$/u
 const REC = /^➡️?\s*(.*)$/u
 const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/
 const FENCE = /^\s*```/
@@ -58,13 +59,13 @@ export function shortRec(rec: string): string {
   return (cut === -1 ? plain : plain.slice(0, cut)).trim()
 }
 
-/** Lines ending in `?` outside code fences: three or more, and no ❓, make a message worth a model's listing. */
+/** Lines ending in `?` outside code fences, bold or italic marks after it aside: three or more, and no ❓, make a message worth a model's listing. */
 export function questionMarkLines(text: string): number {
   let inFence = false
   let n = 0
   for (const line of text.split('\n')) {
     if (FENCE.test(line)) inFence = !inFence
-    else if (!inFence && line.trim().endsWith('?')) n++
+    else if (!inFence && line.trim().replace(/[*_]+$/, '').endsWith('?')) n++
   }
   return n
 }

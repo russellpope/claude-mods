@@ -85,10 +85,25 @@ describe('parsing a grilling round', () => {
     expect(parseFrontier(text)).toEqual([{ n: 2, title: 'T', body: 'body', rec: '(b)' }])
   })
 
+  test('a title with no colon after it still starts a question: a small model drops it', () => {
+    // Haiku's round 2 in the 2026-11-05 live check wrote this shape.
+    const text = '❓ **Q8** - **Which store** (depends on Q1, settled)\nOne file or two?\n\n➡️ (a)'
+    expect(parseFrontier(text)).toEqual([{ n: 8, title: 'Which store', body: '(depends on Q1, settled)\nOne file or two?', rec: '(a)' }])
+    expect(parseFrontier('❓ **Q3** - **T**\nbody\n➡️ (b)')).toEqual([{ n: 3, title: 'T', body: 'body', rec: '(b)' }])
+  })
+
+  test('a colon inside the bold is no part of the title', () => {
+    expect(parseFrontier('❓ **Q1** - **T:** body\n➡️ (a)')).toEqual([{ n: 1, title: 'T', body: 'body', rec: '(a)' }])
+  })
+
   test('lines ending in ? are counted only outside code', () => {
     expect(questionMarkLines(QUESTION_MARKS)).toBe(3)
     expect(questionMarkLines('```\na?\nb?\nc?\n```')).toBe(0)
     expect(parseFrontier(QUESTION_MARKS)).toEqual([])
+  })
+
+  test('a question in bold still ends in ?', () => {
+    expect(questionMarkLines('**Q1. One file?**\n**Q2. Two?** \n__Q3. Three?__')).toBe(3)
   })
 })
 
