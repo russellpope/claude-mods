@@ -33,11 +33,24 @@ export const exploredKey = (hash: string, n: number): string => `${hash}:${n}`
 
 /**
  * Where `$.ui.focus` moves the keyboard when the drawer opens on `view`: the band (`requestId`, from its last drawing),
- * onto the first picker row or the follow-up field. Null with no band drawn yet, or nothing to land on.
+ * onto the first picker row, or an exploration's follow-up field. The field is drawn only once the exploration has an
+ * answer, so before that the keyboard lands on `back`. Null with no band drawn yet, or nothing to land on.
  */
-export function focusTarget(requestId: string, view: DrawerView, f: FrontierView | null): { requestId: string; key: string } | null {
+export function focusTarget(
+  requestId: string,
+  view: DrawerView,
+  f: FrontierView | null,
+  explorations: Record<string, Exploration>,
+): { requestId: string; key: string } | null {
   const first = f?.questions[0]
-  const key = view.view === 'exploration' ? 'follow-up' : view.view === 'picker' && first ? `pick-${first.n}` : ''
+  const key =
+    view.view === 'exploration'
+      ? explorations[view.key]?.turns.length
+        ? 'follow-up'
+        : 'back'
+      : view.view === 'picker' && first
+        ? `pick-${first.n}`
+        : ''
   return requestId && key ? { requestId, key } : null
 }
 

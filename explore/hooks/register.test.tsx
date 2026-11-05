@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
+import type { Exploration } from '../types'
 import { focusTarget, NO_QUESTIONS } from './drawer'
 import { GRILL_ROUND_1 } from './fixtures'
 
@@ -199,25 +200,74 @@ describe('the command', () => {
 })
 
 // The kit answers a mod's `$.ui.focus` beneath every hook, with "no implementation for ui.focus": no test hook sees
-// the call. So where it lands is tested on focusTarget, and the refusal by driving the drawer while the kit refuses.
+// the call. So the mod records what it asked for in `focusAsked`, right beside the call, and a `state.set` hook
+// watches that; where it lands is also tested on focusTarget, and the failure by driving the drawer while the kit fails it.
 describe('the keyboard', () => {
   const F = { hash: 'h', ago: 0, questions: [{ n: 3, title: 'Three', body: '', rec: '' }, { n: 4, title: 'Four', body: '', rec: '' }] }
+  const EX = (turns: number): Exploration => ({
+    key: 'h:3', n: 3, title: 'Three', body: '', rec: '', status: 'idle', pending: null, error: '', canRetry: false, taken: [], savedId: '',
+    turns: Array.from({ length: turns }, () => ({ ask: '', answer: 'a', ms: 0, tokens: 0 })),
+  })
+  /** Every value the mod writes to `focusAsked`, in order. */
+  const asked = (on: On) => {
+    const seen: unknown[] = []
+    on('state.set', async (_$, e, next) => {
+      if (e.plugin === 'explore' && e.key === 'focusAsked') seen.push(e.value)
+      return next(e)
+    })
+    return seen
+  }
 
   test('opening the picker focuses its first row, in the band its last drawing named', () => {
-    expect(focusTarget(BAND_ID, { view: 'picker', note: '' }, F)).toEqual({ requestId: BAND_ID, key: 'pick-3' })
+    expect(focusTarget(BAND_ID, { view: 'picker', note: '' }, F, {})).toEqual({ requestId: BAND_ID, key: 'pick-3' })
   })
 
-  test('opening an exploration focuses its follow-up field', () => {
-    expect(focusTarget(BAND_ID, { view: 'exploration', key: 'h:3' }, F)).toEqual({ requestId: BAND_ID, key: 'follow-up' })
+  test('opening an exploration with an answer focuses its follow-up field', () => {
+    expect(focusTarget(BAND_ID, { view: 'exploration', key: 'h:3' }, F, { 'h:3': EX(1) })).toEqual({ requestId: BAND_ID, key: 'follow-up' })
+  })
+
+  test('opening an exploration with no answer yet focuses back, since its follow-up field is not drawn', () => {
+    expect(focusTarget(BAND_ID, { view: 'exploration', key: 'h:3' }, F, { 'h:3': EX(0) })).toEqual({ requestId: BAND_ID, key: 'back' })
   })
 
   test('no band drawn yet (no requestId), or the empty view: no focus is asked', () => {
-    expect(focusTarget('', { view: 'picker', note: '' }, F)).toBeNull()
-    expect(focusTarget('', { view: 'exploration', key: 'h:3' }, F)).toBeNull()
-    expect(focusTarget(BAND_ID, { view: 'empty', note: NO_QUESTIONS }, null)).toBeNull()
+    expect(focusTarget('', { view: 'picker', note: '' }, F, {})).toBeNull()
+    expect(focusTarget('', { view: 'exploration', key: 'h:3' }, F, { 'h:3': EX(1) })).toBeNull()
+    expect(focusTarget(BAND_ID, { view: 'empty', note: NO_QUESTIONS }, null, {})).toBeNull()
   })
 
-  test('a refused focus is ignored: /explore opens the picker and says nothing', async ($, on) => {
+  test('/explore with the band drawn asks the band, by its requestId, to focus the first row', async ($, on) => {
+    const { clock } = session(on, { messages: grill() })
+    const seen = asked(on)
+    await start($)
+    const ui = await band($)
+    await explore($)
+    await settle(clock)
+    expect(seen).toEqual([{ requestId: BAND_ID, key: 'pick-1' }])
+    await ui.unmount()
+  })
+
+  test('/explore 5 on a fresh question asks the band to focus back', async ($, on) => {
+    const { clock } = session(on, { messages: grill() })
+    const seen = asked(on)
+    await start($)
+    const ui = await band($)
+    await explore($, '5')
+    await settle(clock)
+    expect(seen).toEqual([{ requestId: BAND_ID, key: 'back' }])
+    await ui.unmount()
+  })
+
+  test('/explore before the band is drawn asks no focus', async ($, on) => {
+    const { clock } = session(on, { messages: grill() })
+    const seen = asked(on)
+    await start($)
+    await explore($)
+    await settle(clock)
+    expect(seen).toEqual([])
+  })
+
+  test('a focus that fails or is refused is ignored: /explore opens the picker and says nothing', async ($, on) => {
     const { clock, seen } = session(on, { messages: grill() })
     await start($)
     const ui = await band($) // drawn first, so the command has a requestId and asks
@@ -228,7 +278,7 @@ describe('the keyboard', () => {
     await ui.unmount()
   })
 
-  test('a refused focus is ignored: /explore 5 opens the exploration and forks', async ($, on) => {
+  test('a focus that fails or is refused is ignored: /explore 5 opens the exploration and forks', async ($, on) => {
     const { clock, seen } = session(on, { messages: grill() })
     await start($)
     const ui = await band($)

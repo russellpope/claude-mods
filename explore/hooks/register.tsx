@@ -16,6 +16,8 @@ export const explorations = atom({ plugin: 'explore', key: 'explorations' } as c
 export const listed = atom({ plugin: 'explore', key: 'listed' } as const, {} as Record<string, Question[]>)
 export const hint = atom({ plugin: 'explore', key: 'hint' } as const, 0)
 export const frame = atom({ plugin: 'explore', key: 'frame' } as const, 0)
+// What opening the drawer last asked `$.ui.focus` for: the kit can't see the call itself, so tests watch this.
+export const focusAsked = atom({ plugin: 'explore', key: 'focusAsked' } as const, null as { requestId: string; key: string } | null)
 
 // The band's `requestId`, from its last drawing; '' before one. Not state: a render hook may not write state.
 let bandId = ''
@@ -52,8 +54,10 @@ export async function loadFrontier($: EngineInterface): Promise<{ view: Frontier
 
 /** Moves the keyboard into the band, onto `view`'s first element (focusTarget). No band drawn yet, or a refusal, leaves it where it is. */
 async function focusDrawer($: EngineInterface, view: DrawerView) {
-  const target = focusTarget(bandId, view, await read($, frontier))
-  if (target) await $.ui.focus(target)
+  const target = focusTarget(bandId, view, await read($, frontier), await read($, explorations))
+  if (!target) return
+  await update($, focusAsked, () => target)
+  await $.ui.focus(target)
 }
 
 /** Opens the drawer on `view` and moves the keyboard there: what `/explore` does, and the hint button will. */
