@@ -52,8 +52,8 @@ declare module 'claude-code' {
       hint: number
       /** The spinner's step while a fork runs. */
       frame: number
-      /** The last target opening the drawer asked `$.ui.focus` for; null before one. */
-      focusAsked: { requestId: string; key: string } | null
+      /** The last target opening the drawer asked `$.ui.focus` for, and how the call settled ('moved', or the deny or rejection text); null before one. */
+      focusAsked: { requestId: string; key: string; outcome: string } | null
     }
   }
 

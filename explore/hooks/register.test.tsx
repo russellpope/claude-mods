@@ -200,14 +200,17 @@ describe('the command', () => {
 })
 
 // The kit answers a mod's `$.ui.focus` beneath every hook, with "no implementation for ui.focus": no test hook sees
-// the call. So the mod records what it asked for in `focusAsked`, right beside the call, and a `state.set` hook
-// watches that; where it lands is also tested on focusTarget, and the failure by driving the drawer while the kit fails it.
+// the call. So the mod records what it asked for in `focusAsked` with the call's settled outcome, and a `state.set`
+// hook watches that. Only a real call settles with the kit's text, so the record proves the call was made. Where it
+// lands is also tested on focusTarget, and the failure by driving the drawer while the kit fails it.
 describe('the keyboard', () => {
   const F = { hash: 'h', ago: 0, questions: [{ n: 3, title: 'Three', body: '', rec: '' }, { n: 4, title: 'Four', body: '', rec: '' }] }
   const EX = (turns: number): Exploration => ({
     key: 'h:3', n: 3, title: 'Three', body: '', rec: '', status: 'idle', pending: null, error: '', canRetry: false, taken: [], savedId: '',
     turns: Array.from({ length: turns }, () => ({ ask: '', answer: 'a', ms: 0, tokens: 0 })),
   })
+  /** How the kit's `$.ui.focus` settles: it rejects. A stub that resolves (or no call at all) records something else. */
+  const KIT_FOCUS = expect.stringMatching(/no implementation for ui\.focus/)
   /** Every value the mod writes to `focusAsked`, in order. */
   const asked = (on: On) => {
     const seen: unknown[] = []
@@ -243,7 +246,7 @@ describe('the keyboard', () => {
     const ui = await band($)
     await explore($)
     await settle(clock)
-    expect(seen).toEqual([{ requestId: BAND_ID, key: 'pick-1' }])
+    expect(seen).toEqual([{ requestId: BAND_ID, key: 'pick-1', outcome: KIT_FOCUS }])
     await ui.unmount()
   })
 
@@ -254,7 +257,7 @@ describe('the keyboard', () => {
     const ui = await band($)
     await explore($, '5')
     await settle(clock)
-    expect(seen).toEqual([{ requestId: BAND_ID, key: 'back' }])
+    expect(seen).toEqual([{ requestId: BAND_ID, key: 'back', outcome: KIT_FOCUS }])
     await ui.unmount()
   })
 
@@ -267,7 +270,8 @@ describe('the keyboard', () => {
     expect(seen).toEqual([])
   })
 
-  test('a focus that fails or is refused is ignored: /explore opens the picker and says nothing', async ($, on) => {
+  // The kit's focus only rejects: a resolved `{ deny }` can't be produced here, and takes the same ignored path.
+  test('a focus that fails is ignored: /explore opens the picker and says nothing', async ($, on) => {
     const { clock, seen } = session(on, { messages: grill() })
     await start($)
     const ui = await band($) // drawn first, so the command has a requestId and asks
@@ -278,7 +282,7 @@ describe('the keyboard', () => {
     await ui.unmount()
   })
 
-  test('a focus that fails or is refused is ignored: /explore 5 opens the exploration and forks', async ($, on) => {
+  test('a focus that fails is ignored: /explore 5 opens the exploration and forks', async ($, on) => {
     const { clock, seen } = session(on, { messages: grill() })
     await start($)
     const ui = await band($)
