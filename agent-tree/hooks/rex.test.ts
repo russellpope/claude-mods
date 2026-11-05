@@ -147,6 +147,18 @@ describe('invokesRexSpawn', () => {
   test('namesHarness: claude, codex or opencode as a word', () => {
     expect(['rex run -- claude', 'rex split -- sh -c "codex -m x"', 'rex run -- npm test'].map(namesHarness)).toEqual([true, true, false])
   })
+
+  test('namesHarness: a path or file name that contains one is not a harness', () => {
+    const launches = ['rex run -- /opt/homebrew/bin/claude --model claude-haiku-5-5', 'rex run -- env FOO=1 claude', 'rex new -- opencode']
+    const mentions = [
+      'rex split -s "$S" -b "$B" --split=right --json -- glow -p /Users/me/Projects/claude-mods/PICKUP.md',
+      'rex run -- bat ~/.claude/settings.json',
+      'rex split -- sh -c "claude-team notes"',
+      'rex run -- less docs/claude.md',
+    ]
+    for (const c of launches) expect([c, namesHarness(c)]).toEqual([c, true])
+    for (const c of mentions) expect([c, namesHarness(c)]).toEqual([c, false])
+  })
 })
 
 describe('parseRexStarted', () => {
