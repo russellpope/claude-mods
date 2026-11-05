@@ -215,23 +215,24 @@ describe('the command', () => {
 // the call. So the mod records what it asked for in `focusAsked` with the call's settled outcome, and a `state.set`
 // hook watches that. Only a real call settles with the kit's text, so the record proves the call was made. Where it
 // lands is also tested on focusTarget, and the failure by driving the drawer while the kit fails it.
+/** How the kit's `$.ui.focus` settles: it rejects. A stub that resolves (or no call at all) records something else. */
+const KIT_FOCUS = expect.stringMatching(/no implementation for ui\.focus/)
+/** Every value the mod writes to `focusAsked`, in order. */
+const asked = (on: On) => {
+  const seen: unknown[] = []
+  on('state.set', async (_$, e, next) => {
+    if (e.plugin === 'explore' && e.key === 'focusAsked') seen.push(e.value)
+    return next(e)
+  })
+  return seen
+}
+
 describe('the keyboard', () => {
   const F = { hash: 'h', ago: 0, questions: [{ n: 3, title: 'Three', body: '', rec: '' }, { n: 4, title: 'Four', body: '', rec: '' }] }
   const EX = (turns: number): Exploration => ({
     key: 'h:3', n: 3, title: 'Three', body: '', rec: '', status: 'idle', pending: null, error: '', canRetry: false, taken: [], savedId: '',
     turns: Array.from({ length: turns }, () => ({ ask: '', answer: 'a', ms: 0, tokens: 0 })),
   })
-  /** How the kit's `$.ui.focus` settles: it rejects. A stub that resolves (or no call at all) records something else. */
-  const KIT_FOCUS = expect.stringMatching(/no implementation for ui\.focus/)
-  /** Every value the mod writes to `focusAsked`, in order. */
-  const asked = (on: On) => {
-    const seen: unknown[] = []
-    on('state.set', async (_$, e, next) => {
-      if (e.plugin === 'explore' && e.key === 'focusAsked') seen.push(e.value)
-      return next(e)
-    })
-    return seen
-  }
 
   test('opening the picker focuses its first row, in the band its last drawing named', () => {
     expect(focusTarget(BAND_ID, { view: 'picker', note: '' }, F, {})).toEqual({ requestId: BAND_ID, key: 'pick-3' })
@@ -620,6 +621,84 @@ describe('save to artifacts', () => {
     gate.release()
     await settle(clock)
     expect(await text(ui, 'turn-1')).toMatch(/worktrees\?/)
+    await ui.unmount()
+  })
+})
+
+describe('the hint', () => {
+  const turn = ($: E, answer: string) => $.turn.complete({ answer, durationMs: 1000, isAborted: false, turnId: 't-1', reason: 'answer' })
+  const TWO = '❓ **Q1** - **A**: a?\n\n➡️ (a)\n\n---\n\n❓ **Q2** - **B**: b?\n\n➡️ (b)'
+
+  test("after a turn whose answer has three or more questions, a button with the parsed count and the hotkey e, until the next submit", async ($, on) => {
+    session(on, { messages: grill() })
+    await start($)
+    await turn($, GRILL_ROUND_1)
+    const ui = await band($)
+    expect(await text(ui, 'hint')).toMatch(/10 questions · explore$/)
+    expect((await ui.find({ type: 'Button', key: 'hint-open' }))?.props).toMatchObject({ label: '10 questions · explore', hotkey: 'e' })
+    await $.prompt.submit({ text: '1 ok', wait: false, origin: { kind: 'composer' } })
+    expect(await text(ui, 'hint')).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('the count is of parsed questions, not of lines holding ❓', async ($, on) => {
+    session(on, { messages: grill() })
+    await start($)
+    await turn($, `${ROUND_2}\n\nA stray ❓ in prose.\n\nAnd ❓ again.`)
+    const ui = await band($)
+    expect((await ui.find({ type: 'Button', key: 'hint-open' }))?.props).toMatchObject({ label: '3 questions · explore' })
+    await ui.unmount()
+  })
+
+  test("not after a subagent's turn", async ($, on) => {
+    session(on, { messages: grill() })
+    await start($)
+    await $.turn.complete({ answer: GRILL_ROUND_1, durationMs: 1000, isAborted: false, turnId: 't-2', reason: 'answer', agentId: 'a-1' })
+    const ui = await band($)
+    expect(await text(ui, 'hint')).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('not after a plain answer or two questions, nor while a survey holds the band', async ($, on) => {
+    session(on, { messages: grill() })
+    await start($)
+    await turn($, PLAIN)
+    const ui = await band($)
+    expect(await text(ui, 'hint')).toBeUndefined()
+    await turn($, TWO)
+    expect(await text(ui, 'hint')).toBeUndefined()
+    await ui.unmount()
+    await turn($, GRILL_ROUND_1)
+    const surveyed = await band($, 100, true)
+    expect(await text(surveyed, 'hint')).toBeUndefined()
+    await surveyed.unmount()
+  })
+
+  test('pressing it opens the picker and focuses its first row, without touching the draft', async ($, on) => {
+    const { clock, seen } = session(on, { messages: grill() })
+    const focus = asked(on)
+    await start($)
+    await turn($, GRILL_ROUND_1)
+    const ui = await band($)
+    await ui.press({ key: 'hint-open' })
+    await settle(clock)
+    expect(await text(ui, 'head')).toMatch(/^explore · 10 questions · from the last message\s*close$/)
+    expect(await text(ui, 'hint')).toBeUndefined()
+    expect(focus).toEqual([{ requestId: BAND_ID, key: 'pick-1', outcome: KIT_FOCUS }])
+    expect(seen.fills).toEqual([])
+    expect(seen.forks).toHaveLength(0)
+    await ui.unmount()
+  })
+
+  test('closing the drawer brings the hint back until the next submit', async ($, on) => {
+    const { clock } = session(on, { messages: grill() })
+    await start($)
+    await turn($, GRILL_ROUND_1)
+    const ui = await band($)
+    await ui.press({ key: 'hint-open' })
+    await settle(clock)
+    await ui.press({ key: 'close' })
+    expect(await text(ui, 'hint')).toMatch(/10 questions · explore$/)
     await ui.unmount()
   })
 })

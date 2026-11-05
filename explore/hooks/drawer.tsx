@@ -3,6 +3,8 @@ import { parseOptions, shortRec } from './frontier'
 import { fmtCall } from './prompts'
 
 export type DrawerActions = {
+  /** The hint button: opens the picker, as `/explore` does. */
+  open: () => void
   close: () => void
   pick: (n: number) => void
   back: () => void
@@ -15,6 +17,8 @@ export type DrawerActions = {
 
 export type BandModel = {
   view: DrawerView
+  /** The last turn's question count when three or more; 0 for none. Drawn while the drawer is closed. */
+  hint: number
   frontier: FrontierView | null
   explorations: Record<string, Exploration>
   frame: number
@@ -61,15 +65,26 @@ export function focusTarget(
 
 const fromWhere = (ago: number): string => (ago === 0 ? 'from the last message' : `from ${ago} message${ago === 1 ? '' : 's'} ago`)
 
-/** The drawer: its picker, one exploration, or one line saying why there is nothing to pick. */
+/** The band: the hint button, or the drawer's picker, one exploration, or one line saying why there is nothing to pick. */
 export function drawBand(ui: UI, m: BandModel) {
   const v = m.view
+  if (v.view === 'closed') return drawHint(ui, m)
   if (v.view === 'exploration') {
     const ex = m.explorations[v.key]
     if (ex) return drawExploration(ui, m, ex)
   }
   if (v.view === 'picker' && m.frontier) return drawPicker(ui, m, m.frontier, v.note)
   return drawEmpty(ui, m, v.view === 'empty' && v.note ? v.note : NO_QUESTIONS)
+}
+
+/** One dim button, pressed by a click or, with the band focused, `e`: it opens the picker and leaves the draft alone. */
+function drawHint(ui: UI, m: BandModel) {
+  const { Box, Button } = ui
+  return (
+    <Box key="hint">
+      <Button plain dimColor key="hint-open" hotkey="e" label={`${m.hint} questions · explore`} onPress={m.act.open} />
+    </Box>
+  )
 }
 
 function closeButton(ui: UI, m: BandModel) {

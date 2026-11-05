@@ -10,6 +10,8 @@ import { artifactBody, failure, forkPrompt, listingPrompt, summaryPrompt, summar
 export const COMMAND = 'explore'
 const ARTIFACTS_SHOW = 'mcp__artifacts__show'
 const FRAME_MS = 250
+/** The fewest parsed questions an answer needs for the hint. */
+const HINT_MIN = 3
 
 export const drawer = atom({ plugin: 'explore', key: 'drawer' } as const, { view: 'closed' } as DrawerView)
 export const frontier = atom({ plugin: 'explore', key: 'frontier' } as const, null as FrontierView | null)
@@ -63,7 +65,7 @@ async function focusDrawer($: EngineInterface, view: DrawerView) {
   await update($, focusAsked, () => ({ ...target, outcome: r.deny ? r.deny : 'moved' }))
 }
 
-/** Opens the drawer on `view` and moves the keyboard there: what `/explore` does, and the hint button will. */
+/** Opens the drawer on `view` and moves the keyboard there: what `/explore` and the hint button do. */
 export async function openDrawer($: EngineInterface, view: DrawerView) {
   await update($, drawer, () => view)
   // In the background: the engine waits, bounded, for an element not drawn yet. A `{ deny }` is ignored.
@@ -164,6 +166,19 @@ async function save($: EngineInterface, key: string) {
 /** The picker's note for an argument naming no question of the frontier. */
 const missing = (arg: string) => (/^\d+$/.test(arg) ? `no Q${arg} in these questions` : "explore takes a question's number · /btw for a side question")
 
+/**
+ * Opens the drawer for `/explore [arg]` and the hint button (arg ''): Q`arg`'s exploration, or the picker, with a note
+ * for an argument naming no question; with no frontier, the line saying why.
+ */
+async function openFor($: EngineInterface, arg: string) {
+  const { view, note } = await loadFrontier($)
+  await update($, frontier, () => view)
+  if (!view) return openDrawer($, { view: 'empty', note })
+  const q = /^\d+$/.test(arg) ? view.questions.find(x => x.n === Number(arg)) : undefined
+  if (q) return exploreQuestion($, view, q, true)
+  return openDrawer($, { view: 'picker', note: arg ? missing(arg) : '' })
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -183,17 +198,23 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => {
-    const arg = e.args.trim()
-    const { view, note } = await loadFrontier($)
-    await update($, frontier, () => view)
-    if (!view) {
-      await openDrawer($, { view: 'empty', note })
-      return {}
-    }
-    const q = /^\d+$/.test(arg) ? view.questions.find(x => x.n === Number(arg)) : undefined
-    if (q) await exploreQuestion($, view, q, true)
-    else await openDrawer($, { view: 'picker', note: arg ? missing(arg) : '' })
+    await openFor($, e.args.trim())
     return {}
+  })
+
+  // The hint: the main thread's answer's parsed question count, kept from three up until the next submit.
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+    if (!e.agentId) {
+      const n = parseFrontier(e.answer).length
+      await update($, hint, () => (n >= HINT_MIN ? n : 0))
+    }
+    return done
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (await read($, hint)) await update($, hint, () => 0)
+    return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -201,9 +222,11 @@ export const register: Register = on => {
     bandId = e.requestId
     if (e.props.hasSurvey) return next(e)
     const view = await read($, drawer)
-    if (view.view === 'closed') return next(e)
+    const hinted = await read($, hint)
+    if (view.view === 'closed' && !hinted) return next(e)
     const key = view.view === 'exploration' ? view.key : ''
     const act: DrawerActions = {
+      open: () => void openFor($, '').catch(() => undefined),
       close: () => void update($, drawer, () => ({ view: 'closed' }) as DrawerView).catch(() => undefined),
       pick: n =>
         void (async () => {
@@ -227,6 +250,7 @@ export const register: Register = on => {
     const canSave = view.view === 'exploration' && (await $.tool.list().catch(() => [])).some(t => t.name === ARTIFACTS_SHOW)
     return drawBand($.ui.resolve(e), {
       view,
+      hint: hinted,
       frontier: await read($, frontier),
       explorations: await read($, explorations),
       frame: await read($, frame),
