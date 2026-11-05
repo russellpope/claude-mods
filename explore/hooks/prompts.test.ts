@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Exploration } from '../types'
-import { artifactBody, failure, fmtCall, forkPrompt, summaryText, takeText } from './prompts'
+import { parseFrontier } from './frontier'
+import { artifactBody, failure, fmtCall, forkPrompt, listingPrompt, summaryText, takeText } from './prompts'
 
 const EX: Exploration = {
   key: 'h:5', n: 5, title: 'Several explorations', body: 'One or many?', rec: '(b). Comparing is the point.',
@@ -19,6 +20,13 @@ describe('prompts', () => {
   test('a follow-up carries every turn so far, then the follow-up', () => {
     const ex = { ...EX, turns: [{ ask: '', answer: 'first', ms: 0, tokens: 0 }, { ask: 'why?', answer: 'because', ms: 0, tokens: 0 }] }
     expect(forkPrompt(ex, 'and then?')).toMatch(/The exploration so far:\n\nfirst\n\nFollow-up: why\?\n\nbecause\n\nFollow-up: and then\?\n\nAnswer the follow-up only\.$/)
+  })
+})
+
+describe('the listing', () => {
+  test("its format line, with a number for <n>, is a question the parser reads", () => {
+    const line = listingPrompt('Per repo?').split('\n').find(l => l.startsWith('❓')) ?? ''
+    expect(parseFrontier(line.replace('<n>', '3'))).toEqual([{ n: 3, title: '<a title of a few words>', body: '<the question>', rec: '' }])
   })
 })
 
