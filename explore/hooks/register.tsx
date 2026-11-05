@@ -166,13 +166,28 @@ async function save($: EngineInterface, key: string) {
 /** The picker's note for an argument naming no question of the frontier. */
 const missing = (arg: string) => (/^\d+$/.test(arg) ? `no Q${arg} in these questions` : "explore takes a question's number · /btw for a side question")
 
+/** The newest frontier, loaded from the transcript into the `frontier` atom: what the picker lists. */
+async function reloadFrontier($: EngineInterface) {
+  const loaded = await loadFrontier($)
+  await update($, frontier, () => loaded.view)
+  return loaded
+}
+
+/** `back`: the picker over the newest frontier, reloaded, since a new round may have landed while the drawer was open. */
+async function backToPicker($: EngineInterface) {
+  const { view, note } = await reloadFrontier($)
+  await update($, drawer, () => (view ? { view: 'picker', note: '' } : { view: 'empty', note }) as DrawerView)
+}
+
+/** Whether a fork runs for any exploration. */
+const anyThinking = async ($: EngineInterface) => Object.values(await read($, explorations)).some(x => x.status === 'thinking')
+
 /**
  * Opens the drawer for `/explore [arg]` and the hint button (arg ''): Q`arg`'s exploration, or the picker, with a note
  * for an argument naming no question; with no frontier, the line saying why.
  */
 async function openFor($: EngineInterface, arg: string) {
-  const { view, note } = await loadFrontier($)
-  await update($, frontier, () => view)
+  const { view, note } = await reloadFrontier($)
   if (!view) return openDrawer($, { view: 'empty', note })
   const q = /^\d+$/.test(arg) ? view.questions.find(x => x.n === Number(arg)) : undefined
   if (q) return exploreQuestion($, view, q, true)
@@ -185,12 +200,12 @@ export const register: Register = on => {
     // The spinner steps only while a fork runs.
     $.clock.every(FRAME_MS, () => {
       void (async () => {
-        if (Object.values(await read($, explorations)).some(x => x.status === 'thinking')) await update($, frame, f => f + 1)
+        if (await anyThinking($)) await update($, frame, f => f + 1)
       })().catch(() => undefined)
     })
     await $.command.register({
       name: COMMAND,
-      description: 'Explore one question of the last grilling round beside the conversation',
+      description: 'Explore one question of the last grilling round in a drawer above the prompt',
       argumentHint: '[n]',
       immediate: true,
     })
@@ -202,12 +217,14 @@ export const register: Register = on => {
     return {}
   })
 
-  // The hint: the main thread's answer's parsed question count, kept from three up until the next submit.
+  // The hint: the main thread's answer's parsed question count, kept from three up until the next submit. A new round
+  // closes a drawer left open, so its hint shows; one with a fork still thinking stays, and shows the hint once closed.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (!e.agentId) {
       const n = parseFrontier(e.answer).length
       await update($, hint, () => (n >= HINT_MIN ? n : 0))
+      if (n >= HINT_MIN && !(await anyThinking($))) await update($, drawer, () => ({ view: 'closed' }) as DrawerView)
     }
     return done
   })
@@ -234,7 +251,7 @@ export const register: Register = on => {
           const q = f?.questions.find(x => x.n === n)
           if (f && q) await exploreQuestion($, f, q, false)
         })().catch(() => undefined),
-      back: () => void update($, drawer, () => ({ view: 'picker', note: '' }) as DrawerView).catch(() => undefined),
+      back: () => void backToPicker($).catch(() => undefined),
       followUp: text => {
         if (key && text.trim()) void runFork($, key, text.trim()).catch(() => undefined)
       },

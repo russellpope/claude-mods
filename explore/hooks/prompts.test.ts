@@ -13,6 +13,7 @@ describe('prompts', () => {
   test('the first fork names the question and asks for lettered options', () => {
     const p = forkPrompt(EX, '')
     expect(p).toMatch(/^This is a side exploration/)
+    expect(p).toMatch(/reads your answer in a drawer above the prompt and decides there\./)
     expect(p).toMatch(/Question Q5 · Several explorations\n\nOne or many\?\n\nThe grill's recommendation: \(b\)\. Comparing is the point\./)
     expect(p).toMatch(/`### A\. <name>`, `### B\. <name>`/)
   })

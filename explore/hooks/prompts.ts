@@ -1,7 +1,7 @@
 import type { Exploration } from '../types'
 
 const SIDE =
-  'This is a side exploration, outside the main work. Do not continue the main task, call no tools, and do not answer the other questions. The owner reads your answer in a drawer beside the conversation and decides there.'
+  'This is a side exploration, outside the main work. Do not continue the main task, call no tools, and do not answer the other questions. The owner reads your answer in a drawer above the prompt and decides there.'
 
 const SHAPE =
   'Lay out the options, each under its own heading: `### A. <name>`, `### B. <name>`, and so on. For each, say what it means, its impact on the current work, its cost and risk, and how reversible it is. Then give your recommendation, and what would change it.'

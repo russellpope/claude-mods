@@ -38,7 +38,7 @@ const session = (
     copies: [] as string[],
     toasts: [] as string[],
     saves: [] as Record<string, unknown>[],
-    commands: [] as { name: string; immediate?: true; argumentHint?: string }[],
+    commands: [] as { name: string; description?: string; immediate?: true; argumentHint?: string }[],
   }
   // hold: each fork waits until the test calls release().
   const gate = { release: () => {} }
@@ -77,7 +77,7 @@ const session = (
     return { result: `posted 2026-10-15-what-take-back-inserts v${seen.saves.length} · ~/.claude/artifacts/x/2026-10-15-what-take-back-inserts.md` }
   })
   on('command.register', async (_$, e) => {
-    seen.commands.push({ name: e.name, ...(e.immediate ? { immediate: e.immediate } : {}), ...(e.argumentHint ? { argumentHint: e.argumentHint } : {}) })
+    seen.commands.push({ name: e.name, description: e.description, ...(e.immediate ? { immediate: e.immediate } : {}), ...(e.argumentHint ? { argumentHint: e.argumentHint } : {}) })
     return { value: { command: e.name } }
   })
   // Beneath the mod, the engine's own band: what shows when the mod passes.
@@ -109,10 +109,12 @@ const settle = async (clock: ReturnType<typeof mock.clock>) => {
 }
 
 describe('the command', () => {
-  test('registered immediate, so it runs mid-turn, with the hint [n]', async ($, on) => {
+  test('registered immediate, so it runs mid-turn, with the hint [n], described where the drawer is', async ($, on) => {
     const { seen } = session(on)
     await start($)
-    expect(seen.commands).toEqual([{ name: 'explore', immediate: true, argumentHint: '[n]' }])
+    expect(seen.commands).toEqual([
+      { name: 'explore', description: 'Explore one question of the last grilling round in a drawer above the prompt', immediate: true, argumentHint: '[n]' },
+    ])
   })
 
   test('/explore draws the picker: count, where from, numbers, titles and recommendations', async ($, on) => {
@@ -123,6 +125,19 @@ describe('the command', () => {
     expect(await text(ui, 'head')).toMatch(/^explore · 10 questions · from the last message\s*close$/)
     expect(await text(ui, 'row-2')).toMatch(/^\s*2\s*Which message is the frontier\s*➡️ \(b\)$/)
     expect(await text(ui, 'row-10')).toMatch(/^\s*10\s*Its own mod, or part of artifacts/)
+    await ui.unmount()
+  })
+
+  // A bare digit typed into an empty prompt box answers a band Button with that hotkey: a reply starting `1 ok, …`
+  // would press row 1. So rows have none; a click, or Enter on a focused row, picks one.
+  test("the picker's rows carry no hotkey, so a digit typed into the prompt box picks nothing", async ($, on) => {
+    session(on, { messages: grill() })
+    await start($)
+    await explore($)
+    const ui = await band($)
+    const rows = (await ui.findAll({ type: 'Button' })).filter(b => String(b.key).startsWith('pick-'))
+    expect(rows).toHaveLength(10)
+    expect(rows.map(b => b.props.hotkey)).toEqual(Array.from({ length: 10 }, () => undefined))
     await ui.unmount()
   })
 
@@ -699,6 +714,97 @@ describe('the hint', () => {
     await settle(clock)
     await ui.press({ key: 'close' })
     expect(await text(ui, 'hint')).toMatch(/10 questions · explore$/)
+    await ui.unmount()
+  })
+})
+
+// The owner takes B, sends, and leaves the drawer open; then the next round lands.
+describe('a new round with the drawer open', () => {
+  const turn = ($: E, answer: string) => $.turn.complete({ answer, durationMs: 1000, isAborted: false, turnId: 't-3', reason: 'answer' })
+  const Q5_TITLE = 'Q5 · Several explorations per session'
+
+  test("closes the drawer, so the new round's hint shows, and pressing it lists the new round", async ($, on) => {
+    const { clock, transcript } = session(on, { messages: grill() })
+    await start($)
+    await explore($, '5')
+    await settle(clock)
+    const ui = await band($)
+    expect(await text(ui, 'title')).toBe(Q5_TITLE)
+    transcript.push({ role: 'user', text: '1 ok, 5 b' }, { role: 'assistant', text: ROUND_2 })
+    await turn($, ROUND_2)
+    expect(await text(ui, 'title')).toBeUndefined()
+    expect(await text(ui, 'hint')).toMatch(/3 questions · explore$/)
+    await ui.press({ key: 'hint-open' })
+    await settle(clock)
+    expect(await text(ui, 'head')).toMatch(/^explore · 3 questions · from the last message\s*close$/)
+    await ui.unmount()
+  })
+
+  test('the explorations stay: a round posted again shows its explored question marked, with its answer', async ($, on) => {
+    const { clock, transcript } = session(on, { messages: grill(), forks: [{ isAnswered: true, text: 'five', usage: USAGE }] })
+    await start($)
+    await explore($, '5')
+    await settle(clock)
+    const ui = await band($)
+    transcript.push({ role: 'user', text: 'list them again' }, { role: 'assistant', text: GRILL_ROUND_1 })
+    await turn($, GRILL_ROUND_1)
+    await ui.press({ key: 'hint-open' })
+    await settle(clock)
+    expect(await text(ui, 'row-5')).toMatch(/^●/)
+    await ui.press({ key: 'pick-5' })
+    await settle(clock)
+    expect(await text(ui, 'turn-0')).toBe('five')
+    await ui.unmount()
+  })
+
+  test("leaves the drawer open while a fork is thinking; back then lists the new round, and close shows its hint", async ($, on) => {
+    const { clock, transcript, gate } = session(on, { messages: grill(), hold: true })
+    await start($)
+    await explore($, '5')
+    await settle(clock) // the fork is waiting at the gate
+    const ui = await band($)
+    transcript.push({ role: 'user', text: '1 ok, 5 b' }, { role: 'assistant', text: ROUND_2 })
+    await turn($, ROUND_2)
+    expect(await text(ui, 'title')).toBe(Q5_TITLE)
+    expect(await text(ui, 'status')).toMatch(/thinking…$/)
+    expect(await text(ui, 'hint')).toBeUndefined()
+    gate.release()
+    await settle(clock)
+    await ui.press({ key: 'back' })
+    await settle(clock)
+    expect(await text(ui, 'head')).toMatch(/^explore · 3 questions · from the last message\s*close$/)
+    expect(await text(ui, 'row-5')).toMatch(/^\s*5\s*Retry/)
+    await ui.press({ key: 'close' })
+    expect(await text(ui, 'hint')).toMatch(/3 questions · explore$/)
+    await ui.unmount()
+  })
+})
+
+describe('back', () => {
+  test('lists the questions again, from the last message', async ($, on) => {
+    const { clock } = session(on, { messages: grill() })
+    await start($)
+    await explore($, '5')
+    await settle(clock)
+    const ui = await band($)
+    await ui.press({ key: 'back' })
+    await settle(clock)
+    expect(await text(ui, 'head')).toMatch(/^explore · 10 questions · from the last message\s*close$/)
+    expect(await text(ui, 'row-5')).toMatch(/^●/)
+    await ui.unmount()
+  })
+
+  test('after a newer round, lists the newer round, not the one the drawer opened on', async ($, on) => {
+    const { clock, transcript } = session(on, { messages: grill() })
+    await start($)
+    await explore($, '5')
+    await settle(clock)
+    const ui = await band($)
+    transcript.push({ role: 'user', text: '1 ok, 5 b' }, { role: 'assistant', text: ROUND_2 })
+    await ui.press({ key: 'back' })
+    await settle(clock)
+    expect(await text(ui, 'head')).toMatch(/^explore · 3 questions · from the last message\s*close$/)
+    expect(await text(ui, 'row-5')).toMatch(/^\s*5\s*Retry/)
     await ui.unmount()
   })
 })

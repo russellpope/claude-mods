@@ -129,6 +129,10 @@ function drawEmpty(ui: UI, m: BandModel, why: string) {
   )
 }
 
+/**
+ * One row per question, picked by a click or by Enter once focused (tab moves between rows). No row has a hotkey: a
+ * bare digit typed into an empty prompt box presses a band Button with it, so a reply starting `1 ok` would pick Q1.
+ */
 function drawPicker(ui: UI, m: BandModel, f: FrontierView, why: string) {
   const { Box, Text, Button } = ui
   const fixed = (width: number) => (m.surface === 'terminal' ? { width, flexShrink: 0 } : {})
@@ -143,7 +147,7 @@ function drawPicker(ui: UI, m: BandModel, f: FrontierView, why: string) {
             <Text color="success">{m.explorations[exploredKey(f.hash, q.n)] ? '●' : ' '}</Text>
           </Box>
           <Box flexGrow={1} flexShrink={1} overflow="hidden">
-            <Button plain key={`pick-${q.n}`} {...(q.n <= 9 ? { hotkey: String(q.n) } : {})} label={`${String(q.n).padStart(2)}  ${q.title}`} onPress={() => m.act.pick(q.n)} />
+            <Button plain key={`pick-${q.n}`} label={`${String(q.n).padStart(2)}  ${q.title}`} onPress={() => m.act.pick(q.n)} />
           </Box>
           {recWidth >= 8 && q.rec ? (
             <Box {...fixed(recWidth)}>
