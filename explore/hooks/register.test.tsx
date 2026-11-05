@@ -4,6 +4,8 @@ import type { TestBody } from 'claude-code/testing'
 import type { Exploration } from '../types'
 import { focusTarget, NO_QUESTIONS } from './drawer'
 import { GRILL_ROUND_1 } from './fixtures'
+import { parseFrontier } from './frontier'
+import { summaryPrompt } from './prompts'
 
 type On = Parameters<TestBody>[1]
 type E = Parameters<TestBody>[0]
@@ -17,16 +19,20 @@ const BAND_ID = 'band-1'
 
 type Msg = { role: 'user' | 'assistant'; text: string }
 type Fork = { isAnswered: true; text: string; usage: typeof USAGE } | { isAnswered: false; reason: string; status?: number | null; error?: string; usage?: typeof USAGE }
+/** How one save settles: posted, the tool's error (`isError`), a hook's `{ deny }`, or a rejection (no tool answers). */
+type Save = 'posted' | 'isError' | 'deny' | 'reject'
 
 /** A session whose transcript starts as `messages` (push to it to go on); records forks, completions, fills, copies, toasts and saves. */
 const session = (
   on: On,
-  opts: { messages?: Msg[]; forks?: Fork[]; listing?: Fork; filled?: boolean; tools?: string[]; hold?: boolean } = {},
+  opts: { messages?: Msg[]; forks?: Fork[]; listing?: Fork; filled?: boolean; tools?: string[]; hold?: boolean; saves?: Save[] } = {},
 ) => {
   const clock = mock.clock(on, { now: NOW })
   const transcript: Msg[] = [...(opts.messages ?? [])]
   const seen = {
     forks: [] as string[],
+    /** Each fork's `effort`, in order; undefined where none was passed. */
+    efforts: [] as (string | undefined)[],
     completes: 0,
     fills: [] as { text: string; mode: string }[],
     copies: [] as string[],
@@ -39,6 +45,7 @@ const session = (
   on('session.messages', async () => ({ value: transcript.map(m => ({ ...m, toolUses: [] })) }))
   on('model.fork', async (_$, e) => {
     seen.forks.push(e.prompt)
+    seen.efforts.push(e.effort)
     if (opts.hold) await new Promise<void>(r => (gate.release = r))
     const r = opts.forks?.[seen.forks.length - 1] ?? { isAnswered: true, text: ANSWER, usage: USAGE }
     return { value: r as never }
@@ -62,6 +69,11 @@ const session = (
   on('tool.list', async () => ({ value: (opts.tools ?? []).map(name => ({ name, description: '', mcp: true })) }))
   on('tool.call', { tool: 'mcp__artifacts__show' }, async (_$, e) => {
     seen.saves.push({ ...e })
+    const how = opts.saves?.[seen.saves.length - 1] ?? 'posted'
+    if (how === 'isError') return { isError: true as const, result: 'body is required', text: 'body is required' }
+    if (how === 'deny') return { deny: 'not now' }
+    // A hook that throws is skipped, so the call falls through to no tool and rejects, as for a tool no one serves.
+    if (how === 'reject') throw new Error('no artifacts')
     return { result: `posted 2026-10-15-what-take-back-inserts v${seen.saves.length} · ~/.claude/artifacts/x/2026-10-15-what-take-back-inserts.md` }
   })
   on('command.register', async (_$, e) => {
@@ -407,6 +419,207 @@ describe('an exploration', () => {
     await settle(clock)
     expect(seen.forks).toHaveLength(2)
     expect(await text(ui, 'turn-0')).toMatch(/One button per option/)
+    await ui.unmount()
+  })
+})
+
+describe('take back', () => {
+  test('each option heading is a take button; take B inserts "4: B, <name>" at the cursor', async ($, on) => {
+    const { clock, seen } = session(on, { messages: grill() })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    expect(await ui.find({ type: 'Button', key: 'take-A' })).toBeDefined()
+    await ui.press({ key: 'take-B' })
+    await settle(clock)
+    expect(seen.fills).toEqual([{ text: '4: B, A summary in your voice', mode: 'insert' }])
+    await ui.unmount()
+  })
+
+  test('an answer without option headings offers only take summary', async ($, on) => {
+    const { clock } = session(on, { messages: grill(), forks: [{ isAnswered: true, text: 'Just do (b).', usage: USAGE }] })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    expect(await ui.find({ type: 'Button', key: 'take-A' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'take-summary' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('take summary forks once more, at low effort, with the summary prompt, and inserts "4: <summary>"', async ($, on) => {
+    const { clock, seen } = session(on, { messages: grill(), forks: [{ isAnswered: true, text: ANSWER, usage: USAGE }, { isAnswered: true, text: 'B, but only for worktrees.\n', usage: USAGE }] })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    await ui.press({ key: 'take-summary' })
+    await settle(clock)
+    expect(seen.forks).toHaveLength(2)
+    const q4 = parseFrontier(GRILL_ROUND_1).find(q => q.n === 4)
+    if (!q4) throw new Error('the fixture has no Q4')
+    const ex: Exploration = {
+      key: '', n: 4, title: q4.title, body: q4.body, rec: q4.rec, status: 'idle', pending: null, error: '', canRetry: false, taken: [], savedId: '',
+      turns: [{ ask: '', answer: ANSWER, ms: 0, tokens: USAGE.output_tokens }],
+    }
+    expect(seen.forks[1]).toBe(summaryPrompt(ex))
+    expect(seen.forks[1]).toMatch(/In one or two sentences, in the owner's own voice/)
+    expect(seen.efforts[1]).toBe('low')
+    expect(seen.fills).toEqual([{ text: '4: B, but only for worktrees.', mode: 'insert' }])
+    await ui.unmount()
+  })
+
+  test("explorations and follow-ups fork at the session's own effort; only take summary asks for low", async ($, on) => {
+    const { clock, seen } = session(on, { messages: grill() })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    await ui.input({ key: 'follow-up', text: 'what about worktrees?' })
+    await settle(clock)
+    await ui.press({ key: 'take-summary' })
+    await settle(clock)
+    expect(seen.forks).toHaveLength(3)
+    expect(seen.efforts).toEqual([undefined, undefined, 'low'])
+    await ui.unmount()
+  })
+
+  test('a take summary that fails offers retry, and retry forks the summary again at low effort and takes it back', async ($, on) => {
+    const { clock, seen } = session(on, {
+      messages: grill(),
+      forks: [
+        { isAnswered: true, text: ANSWER, usage: USAGE },
+        { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: USAGE },
+        { isAnswered: true, text: 'B, but only for worktrees.', usage: USAGE },
+      ],
+    })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    await ui.press({ key: 'take-summary' })
+    await settle(clock)
+    expect(await text(ui, 'status')).toMatch(/^api error 529 · overloaded\s*retry$/)
+    expect(seen.fills).toEqual([])
+    await ui.press({ key: 'retry' })
+    await settle(clock)
+    expect(seen.forks).toHaveLength(3)
+    expect(seen.forks[2]).toBe(seen.forks[1])
+    expect(seen.efforts).toEqual([undefined, 'low', 'low'])
+    expect(seen.fills).toEqual([{ text: '4: B, but only for worktrees.', mode: 'insert' }])
+    await ui.unmount()
+  })
+
+  test('when the draft will not take it (a dialog, or headless), it is copied and a toast says so', async ($, on) => {
+    const { clock, seen } = session(on, { messages: grill(), filled: false })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    await ui.press({ key: 'take-A' })
+    await settle(clock)
+    expect(seen.copies).toEqual(['4: A, One button per option'])
+    expect(seen.toasts.at(-1)).toBe('copied, to paste into your reply: 4: A, One button per option')
+    await ui.unmount()
+  })
+})
+
+describe('save to artifacts', () => {
+  test('hidden while the artifacts tool is not listed', async ($, on) => {
+    const { clock } = session(on, { messages: grill() })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    expect(await ui.find({ type: 'Button', key: 'save' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('posts the whole exploration as kind exploration; saving again passes the id that came back', async ($, on) => {
+    const { clock, seen } = session(on, { messages: grill(), tools: ['mcp__artifacts__show'] })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    await ui.press({ key: 'take-B' })
+    await settle(clock)
+    await ui.press({ key: 'save' })
+    await settle(clock)
+    expect(seen.saves[0]).toMatchObject({ tool: 'mcp__artifacts__show', title: 'What "take back" inserts', kind: 'exploration' })
+    expect(seen.saves[0]?.id).toBeUndefined()
+    const body = String(seen.saves[0]?.body)
+    expect(body).toMatch(/^## Q4 · What "take back" inserts\n\nThe exploration lays out options A, B, C… Options:/)
+    expect(body).toMatch(/➡️ The grill's recommendation: \(c\)\./)
+    expect(body).toMatch(/## Exploration\n\n### A\. One button per option/)
+    expect(body).toMatch(/## Taken back\n\n- 4: B, A summary in your voice$/)
+    expect(seen.toasts.at(-1)).toBe('saved to artifacts · 2026-10-15-what-take-back-inserts v1')
+    await ui.press({ key: 'save' })
+    await settle(clock)
+    expect(seen.saves[1]?.id).toBe('2026-10-15-what-take-back-inserts')
+    await ui.unmount()
+  })
+
+  // A failed save shows on the drawer's status line, where every failure shows, and as a toast.
+  const failedSave = (how: Save, why: RegExp) =>
+    async ($: E, on: On) => {
+      const { clock, seen } = session(on, { messages: grill(), tools: ['mcp__artifacts__show'], saves: [how] })
+      await start($)
+      await explore($, '4')
+      await settle(clock)
+      const ui = await band($)
+      await ui.press({ key: 'save' })
+      await settle(clock)
+      expect(seen.saves).toHaveLength(1)
+      expect(await text(ui, 'status')).toMatch(why)
+      expect(seen.toasts.at(-1)).toMatch(why)
+      expect(seen.toasts.some(t => t.startsWith('saved'))).toBe(false)
+      // No retry button: the save button is still there to press again.
+      expect(await ui.find({ type: 'Button', key: 'retry' })).toBeUndefined()
+      expect(await ui.find({ type: 'Button', key: 'save' })).toBeDefined()
+      await ui.unmount()
+    }
+
+  test('a save the tool answers with an error (isError) shows it on the status line', failedSave('isError', /^save to artifacts failed: body is required$/))
+  test('a save that rejects (no tool has the name) shows it on the status line', failedSave('reject', /^save to artifacts failed: .+/))
+  test('a save a hook denies shows it on the status line', failedSave('deny', /^save to artifacts failed: not now$/))
+
+  test('a save that fails, then one that posts: the status line goes back to the last answer', async ($, on) => {
+    const { clock, seen } = session(on, { messages: grill(), tools: ['mcp__artifacts__show'], saves: ['isError', 'posted'] })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    await ui.press({ key: 'save' })
+    await settle(clock)
+    expect(await text(ui, 'status')).toMatch(/^save to artifacts failed/)
+    await ui.press({ key: 'save' })
+    await settle(clock)
+    expect(await text(ui, 'status')).toBe('answered in 0s · 1.2k tokens')
+    expect(seen.toasts.at(-1)).toBe('saved to artifacts · 2026-10-15-what-take-back-inserts v2')
+    await ui.unmount()
+  })
+
+  test('a save that fails while a follow-up runs leaves the spinner, and the follow-up still lands', async ($, on) => {
+    const { clock, seen, gate } = session(on, { messages: grill(), tools: ['mcp__artifacts__show'], saves: ['isError'], hold: true })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    gate.release()
+    await settle(clock)
+    const ui = await band($)
+    await ui.input({ key: 'follow-up', text: 'worktrees?' })
+    await settle(clock)
+    await ui.press({ key: 'save' })
+    await settle(clock)
+    expect(seen.toasts.at(-1)).toBe('save to artifacts failed: body is required')
+    expect(await text(ui, 'status')).toMatch(/thinking…$/)
+    // Still running, so a second follow-up starts no second fork.
+    await ui.input({ key: 'follow-up', text: 'again?' })
+    expect(seen.forks).toHaveLength(2)
+    gate.release()
+    await settle(clock)
+    expect(await text(ui, 'turn-1')).toMatch(/worktrees\?/)
     await ui.unmount()
   })
 })

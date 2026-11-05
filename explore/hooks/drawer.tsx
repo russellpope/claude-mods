@@ -1,5 +1,5 @@
 import type { DrawerView, Exploration, FrontierView } from '../types'
-import { shortRec } from './frontier'
+import { parseOptions, shortRec } from './frontier'
 import { fmtCall } from './prompts'
 
 export type DrawerActions = {
@@ -8,6 +8,9 @@ export type DrawerActions = {
   back: () => void
   followUp: (text: string) => void
   retry: () => void
+  take: (letter: string, name: string) => void
+  takeSummary: () => void
+  save: () => void
 }
 
 export type BandModel = {
@@ -17,6 +20,8 @@ export type BandModel = {
   frame: number
   cols: number
   surface: string
+  /** Whether the artifacts mod's show tool is in the tool list. */
+  canSave: boolean
   act: DrawerActions
 }
 
@@ -165,6 +170,15 @@ function drawExploration(ui: UI, m: BandModel, ex: Exploration) {
         {ex.status === 'failed' && ex.canRetry ? <Button plain key="retry" label="retry" onPress={m.act.retry} /> : null}
       </Box>
       {first && Input ? <Input key="follow-up" label="follow-up" placeholder="ask about this" submitLabel="ask" onSubmit={m.act.followUp} /> : null}
+      {first ? (
+        <Box key="actions" flexDirection="row" flexWrap="wrap" columnGap={2}>
+          {parseOptions(first.answer).map(o => (
+            <Button plain key={`take-${o.letter}`} label={`take ${o.letter}`} onPress={() => m.act.take(o.letter, o.name)} />
+          ))}
+          <Button plain key="take-summary" label="take summary" onPress={m.act.takeSummary} />
+          {m.canSave ? <Button plain key="save" label="save to artifacts" onPress={m.act.save} /> : null}
+        </Box>
+      ) : null}
     </Box>
   )
 }

@@ -4,8 +4,8 @@ export type Question = { n: number; title: string; body: string; rec: string }
 /** One fork's ask and its answer; the question itself is asked as ''. */
 export type Turn = { ask: string; answer: string; ms: number; tokens: number }
 
-/** What a failed fork was doing, so retry can do it again. */
-export type Pending = { kind: 'ask'; ask: string } | { kind: 'summary' }
+/** What failed (a fork, so retry can do it again, or a save, whose own button is its retry). */
+export type Pending = { kind: 'ask'; ask: string } | { kind: 'summary' } | { kind: 'save' }
 
 /** A side conversation about one question. */
 export type Exploration = {

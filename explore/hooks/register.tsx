@@ -5,9 +5,10 @@ import type { DrawerView, Exploration, FrontierView, Pending, Question } from '.
 import { drawBand, exploredKey, focusTarget, NO_QUESTIONS } from './drawer'
 import type { DrawerActions } from './drawer'
 import { findFrontier, hashText, parseFrontier } from './frontier'
-import { failure, forkPrompt, listingPrompt } from './prompts'
+import { artifactBody, failure, forkPrompt, listingPrompt, summaryPrompt, summaryText, takeText } from './prompts'
 
 export const COMMAND = 'explore'
+const ARTIFACTS_SHOW = 'mcp__artifacts__show'
 const FRAME_MS = 250
 
 export const drawer = atom({ plugin: 'explore', key: 'drawer' } as const, { view: 'closed' } as DrawerView)
@@ -96,10 +97,68 @@ async function exploreQuestion($: EngineInterface, f: FrontierView, q: Question,
   if (ex && !ex.turns.length && ex.status === 'idle') void runFork($, key, '').catch(() => undefined)
 }
 
+/** Puts `text` at the cursor in the owner's draft; under a dialog or headless, on the clipboard with a toast. */
+async function takeBack($: EngineInterface, key: string, text: string) {
+  const filled = await $.prompt.fill({ text, mode: 'insert' }).catch(() => ({ isFilled: false }))
+  if (!filled.isFilled) {
+    const copied = await $.ui.copy({ text }).catch(() => ({ isCopied: false }))
+    $.ui.toast(copied.isCopied ? `copied, to paste into your reply: ${text}` : `could not insert or copy: ${text}`)
+  }
+  await setEx($, key, e => ({ ...e, taken: [...e.taken, text] }))
+}
+
+/** One more fork, at low effort, for where the owner lands in their own words; taken back as `n: <summary>`. */
+async function takeSummary($: EngineInterface, key: string) {
+  const ex = await getEx($, key)
+  if (!ex || ex.status === 'thinking' || !ex.turns.length) return
+  await setEx($, key, e => ({ ...e, status: 'thinking', pending: { kind: 'summary' }, error: '', canRetry: false }))
+  const r = await $.model.fork({ prompt: summaryPrompt(ex), effort: 'low' }).catch(rejected)
+  if (!r.isAnswered) {
+    const f = failure(r)
+    await setEx($, key, e => ({ ...e, status: 'failed', error: f.error, canRetry: f.canRetry }))
+    return
+  }
+  await setEx($, key, e => ({ ...e, status: 'idle', pending: null }))
+  await takeBack($, key, summaryText(ex.n, r.text))
+}
+
 async function retry($: EngineInterface, key: string) {
   const ex = await getEx($, key)
   const p: Pending | null = ex?.status === 'failed' ? ex.pending : null
+  if (p?.kind === 'summary') {
+    await setEx($, key, e => ({ ...e, status: 'idle' }))
+    return takeSummary($, key)
+  }
   if (p?.kind === 'ask') return runFork($, key, p.ask)
+}
+
+/** A failed save on the status line (left alone while a fork runs there, whose spinner and guard it would clobber) and as a toast. */
+async function saveFailed($: EngineInterface, key: string, why: string) {
+  const error = `save to artifacts failed: ${why}`
+  await setEx($, key, e => (e.status === 'thinking' ? e : { ...e, status: 'failed', pending: { kind: 'save' }, error, canRetry: false }))
+  $.ui.toast(error)
+}
+
+/**
+ * Saves the whole exploration through the artifacts mod's tool; a second save passes the id the first returned.
+ * A failed save (a deny, the tool's error, or a rejection when no tool has the name) shows on the status line, unless
+ * a fork is running there, and as a toast. A save that posts clears an earlier save's failure.
+ */
+async function save($: EngineInterface, key: string) {
+  const ex = await getEx($, key)
+  if (!ex) return
+  const r = await $.tool
+    .call({ tool: ARTIFACTS_SHOW, title: ex.title, kind: 'exploration', body: artifactBody(ex), ...(ex.savedId ? { id: ex.savedId } : {}) })
+    .catch((err: unknown) => ({ deny: err instanceof Error ? err.message : String(err) }))
+  if (r.deny !== undefined) return saveFailed($, key, r.deny)
+  if (r.isError) return saveFailed($, key, r.text ?? String(r.result ?? 'the tool reported an error'))
+  const posted = /^posted (\S+) (v\d+)/.exec(typeof r.result === 'string' ? r.result : String(r.text ?? ''))
+  await setEx($, key, e => ({
+    ...e,
+    ...(posted?.[1] ? { savedId: posted[1] } : {}),
+    ...(e.pending?.kind === 'save' ? { status: 'idle' as const, pending: null, error: '' } : {}),
+  }))
+  $.ui.toast(posted ? `saved to artifacts · ${posted[1]} ${posted[2]}` : 'saved to artifacts')
 }
 
 /** The picker's note for an argument naming no question of the frontier. */
@@ -157,7 +216,15 @@ export const register: Register = on => {
         if (key && text.trim()) void runFork($, key, text.trim()).catch(() => undefined)
       },
       retry: () => void retry($, key).catch(() => undefined),
+      take: (letter, name) =>
+        void (async () => {
+          const ex = await getEx($, key)
+          if (ex) await takeBack($, key, takeText(ex.n, letter, name))
+        })().catch(() => undefined),
+      takeSummary: () => void takeSummary($, key).catch(() => undefined),
+      save: () => void save($, key).catch(() => undefined),
     }
+    const canSave = view.view === 'exploration' && (await $.tool.list().catch(() => [])).some(t => t.name === ARTIFACTS_SHOW)
     return drawBand($.ui.resolve(e), {
       view,
       frontier: await read($, frontier),
@@ -165,6 +232,7 @@ export const register: Register = on => {
       frame: await read($, frame),
       cols: e.props.bodyColumns || 80,
       surface: e.surface,
+      canSave,
       act,
     })
   })
