@@ -1,12 +1,12 @@
 # explore: design
 
-Date: 2026-10-15. Status: settled in a grilling round (Q1–Q10, every recommendation accepted), pending spec review. Terms as in `GLOSSARY.md`.
+Date: 2026-10-15. Status: settled in a grilling round (Q1–Q10, every recommendation accepted). Amended 2026-11-04 by a second grilling round (Q1–Q10 again, every recommendation accepted) for what changed since: see [Amendments, 2026-11-04](#amendments-2026-11-04), which win over anything below. Terms as in `GLOSSARY.md`.
 
 ## Goal
 
 A grilling session (`/grill-with-docs`, a `/wayfinder` grilling ticket) hands the owner a frontier of 7–12 questions. Most are quick, but one needs depth. The owner explores that one in the drawer: its options, their impact, cost, risk and reversibility, and a recommendation. Follow-ups are asked there too. None of it leaves the conversation or adds to it, and the conclusion is then taken back into the owner's reply.
 
-Success: a frontier of ten questions lands, and the hint line says `10 questions · /explore to dig into one`. The owner types half their reply, runs `/explore 5`, reads the options, asks one follow-up and presses `take B`. `5: B, <option name>` appears at the cursor in their draft. They finish the reply and send it. The main conversation holds only that reply.
+Success: a frontier of ten questions lands, and the hint line says `10 questions · explore`. The owner types half their reply, presses the hint (a click, or ctrl+x tab then `e`), picks 5, reads the options, asks one follow-up and presses `take B`. `5: B, <option name>` appears at the cursor in their draft. They finish the reply and send it. The main conversation holds only that reply.
 
 ## Decisions
 
@@ -85,7 +85,7 @@ Test first with the mods test kit, with `session.messages`, `model.fork`, `model
 - **Several explorations**: Q5 and Q7 are both listed with `●`, and reopening one shows its own exploration.
 - A deliberate breakage of each guard, to prove a test fails without it.
 
-Then a live check in a herdr test session: a real `/grill-with-docs` round, `/explore` on one question while a reply is half typed, a follow-up, take back, and save to artifacts with that mod loaded.
+Then a live check in a Rex test session: a real `/grill-with-docs` round, the hint button on one question while a reply is half typed, a follow-up, take back, and save to artifacts with that mod loaded.
 
 ## Out of scope (v1)
 
@@ -93,3 +93,20 @@ Then a live check in a herdr test session: a real `/grill-with-docs` round, `/ex
 - Explorations kept past the session other than through save to artifacts.
 - Questions asked in an `AskUserQuestion` dialog: the grills used here write theirs as text.
 - Exploring a frontier older than the newest one.
+- **Free questions** (from 2026-11-04): Claude Code's built-in `/btw` answers a free side question.
+
+## Amendments, 2026-11-04
+
+A second grilling round, after Claude Code moved from 2.1.300 to 2.1.318, the owner moved from herdr to Rex, and the artifacts mod merged. Every recommendation was accepted. These win over the sections above.
+
+| # | Topic | Decision |
+| --- | --- | --- |
+| 1 | Scope | v1 as specified, less free questions (6). |
+| 6 | Free questions | Dropped: the built-in `/btw` ("Ask a quick side question without interrupting the main conversation") covers them. `/explore <text>` and the free-question field go. With no frontier, `/explore` and the drawer say `no questions to explore · /btw for a side question`. When the Haiku listing fails, the drawer says so and stops there. Follow-ups keep their field. |
+| 7 | Opening over a draft | A slash command is typed at the start of the prompt box, which holds the half-written reply, so the hint line becomes a button: `10 questions · explore`, pressed by a click or, with the band focused, `e`. It opens the picker without touching the draft. `/explore` and `/explore N` stay, for an empty box; the command's hint is `[n]`. |
+| 8 | Keyboard | When explore opens the drawer (from the hint or the command) it moves the keyboard there with `$.ui.focus`, using the `requestId` its `AbovePrompt` render hook receives. Where the keyboard lands after a take back is recorded in the live check. |
+| 9 | Effort | Explorations and follow-ups fork at the session's own effort (no `effort` passed). Take summary forks with `effort: 'low'`. |
+| 10 | Minimum version | The README says it requires Claude Code 2.1.318 or later. A minimum, never a pin; no runtime check. |
+| 3 | Live check | In Rex, driven with the team helper (`skills/lib/rex-team.sh` in deepthought): `spawn`, `prompt`, `keys`, `read`, and `rex capture`. Where the helper can't reach the band's keys, the owner presses them while the check watches. |
+
+To check in the live run: the engine says a bare digit typed into an empty prompt box answers a band button (for surveys). If it also presses the picker's numbered rows, the rows move to letters or clicks.
