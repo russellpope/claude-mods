@@ -19,7 +19,7 @@ describe('parseRexList', () => {
     const out = JSON.stringify({ panes: [pane('a1', { label: 'demo-impl' })], windows: { 'window:a1': 'mods' } })
     expect(parseRexList(out)).toEqual({
       agents: [
-        { pane: 'block:a1', name: 'demo-impl', harness: 'claude', status: 'working', title: '', label: 'Doing things', cwd: '/w', workspace: 'session:s1', session: '', terminal: 'block:a1#42', tab: 'window:a1' },
+        { mux: 'rex', pane: 'block:a1', name: 'demo-impl', harness: 'claude', status: 'working', title: '', label: 'Doing things', cwd: '/w', workspace: 'session:s1', session: '', terminal: 'block:a1#42', tab: 'window:a1' },
       ],
       labels: { 'window:a1': 'mods' },
       owners: { 'block:a1': 'client:app' },

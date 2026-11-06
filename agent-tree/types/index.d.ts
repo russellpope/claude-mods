@@ -18,6 +18,8 @@ export type Edge = {
 
 /** One row of `herdr agent list`, trimmed to what the mod reads. */
 export type HerdrAgent = {
+  /** Row backend; absent in snapshots kept from before mixed listings. */
+  mux?: 'herdr' | 'rex'
   pane: string
   name: string
   harness: string
@@ -52,6 +54,7 @@ export type Usage = {
 }
 
 export type TreeNode = {
+  mux?: 'herdr' | 'rex'
   pane: string
   parent: string
   depth: number

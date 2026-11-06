@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Ding, Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
 import { ackAll, addDings, findDings, markSeen, nameDings, needYou, parentsOf, settleDings } from './dings'
-import { herdrError, invokesAgentStart, newAgents, parseAgentList, parseStarted, parseTabList } from './herdr'
+import { herdrError, invokesAgentStart, mayStartHerdr, newAgents, parseAgentList, parseStarted, parseTabList } from './herdr'
 import { WEEK_MS, edgeAt, edgeFileName, ledgerDir, makeEdge, parseEdge } from './ledger'
 import { CODEX_THREAD_ARGV, LIST_ARGV, focusArgvs, invokesRexSpawn, keepNames, namesHarness, parseClaudeSessionFile, parseRexList, parseRexStarted, pidOf } from './rex'
 import type { RexList } from './rex'
@@ -13,7 +13,7 @@ import { completeRun, spawnRun, stepRun } from './inproc'
 import { drawPane } from './pane'
 import { TICKET_GREP_ARGV, batchCounts, batchStamp, parseTicketGrep, repoFromCommonDir, ticketFor } from './tickets'
 import type { Ticket } from './tickets'
-import { buildTree } from './tree'
+import { buildTree, roleOf } from './tree'
 import { CHUNK_BYTES, addTranscript, consumeChunk, emptyUsage, toUsage, transcriptPath } from './usage'
 import type { UsageAcc } from './usage'
 import { statusLine } from './view'
@@ -54,9 +54,16 @@ export async function muxOf($: EngineInterface): Promise<Mux> {
 
 const muxName = (mux: Mux): string => (mux?.kind === 'rex' ? 'Rex' : 'herdr')
 
-/** `herdr agent list`, or Rex's terminal blocks running an agent; null when the multiplexer does not answer. */
+/** Rex sessions also see herdr teams when available. Failure of the session's own backend stays an error. */
 export async function listAgents($: EngineInterface, mux: Mux): Promise<HerdrAgent[] | null> {
-  if (mux?.kind === 'rex') return (await listRex($))?.agents ?? null
+  if (mux?.kind === 'rex') {
+    const [rex, herdr] = await Promise.all([listRex($), listHerdr($)])
+    return rex ? [...rex.agents, ...(herdr ?? [])] : null
+  }
+  return listHerdr($)
+}
+
+async function listHerdr($: EngineInterface): Promise<HerdrAgent[] | null> {
   try {
     const r = await $.process.run(['herdr', 'agent', 'list'], { timeoutMs: 5000 })
     return r.exitCode === 0 ? parseAgentList(r.stdout) : null
@@ -254,6 +261,7 @@ async function withTickets($: EngineInterface, nodes: TreeNode[], repos: Record<
 
 /** A Rex block recorded before its agent shows: only its id and label are known. */
 const rexPlaceholder = (pane: string, name: string): HerdrAgent => ({
+  mux: 'rex',
   pane,
   name,
   harness: '',
@@ -271,8 +279,11 @@ let running: Promise<void> | null = null
 
 // A press always answers: the multiplexer jumps to the pane, or a toast says why it could not.
 async function focusPane($: EngineInterface, pane: string): Promise<boolean> {
-  const mux = await muxOf($)
-  if (mux?.kind === 'rex') return focusRexPane($, mux.root, pane)
+  const target = (await read($, snapshot)).all.find(a => a.pane === pane)
+  // Old snapshots and dings may outlive the live row. Pane ids also distinguish the backends.
+  if ((target?.mux ?? (pane.startsWith('block:') ? 'rex' : 'herdr')) === 'rex') {
+    return focusRexPane($, (await muxOf($))?.root ?? '', pane)
+  }
   const r = await $.process.run(['herdr', 'agent', 'focus', pane], { timeoutMs: 5000 }).catch((err: unknown) => String(err))
   if (typeof r !== 'string' && r.exitCode === 0) return true
   const reason = typeof r === 'string' ? r : herdrError(r.stdout) || r.stderr.trim() || `exit ${r.exitCode}`
@@ -297,8 +308,8 @@ async function focusRexPane($: EngineInterface, root: string, pane: string): Pro
 }
 
 /** Each tab's label by id; none when the multiplexer does not answer. */
-async function tabLabels($: EngineInterface, mux: Mux): Promise<Record<string, string>> {
-  if (mux?.kind === 'rex') return lastRex.labels
+async function tabLabels($: EngineInterface, kind: 'herdr' | 'rex'): Promise<Record<string, string>> {
+  if (kind === 'rex') return lastRex.labels
   const r = await $.process.run(['herdr', 'tab', 'list'], { timeoutMs: 5000 }).catch(() => null)
   return r && r.exitCode === 0 ? parseTabList(r.stdout) : {}
 }
@@ -345,8 +356,14 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
   }
   // A list from before an error is stale: the turns since then were never seen.
   let found = findDings({ prev: prev.all, prevAt: prev.error ? 0 : prev.at, next: agents, at, root, parents: parentsOf(edges, built.nodes) })
-  // The multiplexer is asked for its tabs only when a ding comes from an agent it has no name for.
-  if (found.some(d => !d.name)) found = nameDings(found, agents, await tabLabels($, mux))
+  // Tab ids belong to a backend: identical ids in the two lists must not exchange labels.
+  for (const kind of ['rex', 'herdr'] as const) {
+    const group = agents.filter(a => a.mux === kind)
+    const unnamed = found.filter(d => !d.name && group.some(a => a.pane === d.pane))
+    if (!unnamed.length) continue
+    const named = new Map(nameDings(unnamed, group, await tabLabels($, kind)).map(d => [d.pane, d]))
+    found = found.map(d => named.get(d.pane) ?? d)
+  }
   const log = await update($, dings, l => settleDings(addDings(l, found), agents))
   let nodes = built.nodes
   let repos = prev.repos
@@ -389,10 +406,12 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const command = String(e.command ?? '')
     const isHerdr = invokesAgentStart(command)
-    if (!isHerdr && !invokesRexSpawn(command)) return next(e)
+    const watchHerdr = mayStartHerdr(command)
+    const watchRex = invokesRexSpawn(command)
+    if (!watchHerdr && !watchRex) return next(e)
     const mux = await muxOf($)
-    // Each multiplexer's spawn counts only inside it: a herdr pane's `rex run` makes no herdr pane.
-    if (!mux || (mux.kind === 'herdr') !== isHerdr) return next(e)
+    // A herdr session keeps its original detection. A Rex session can start either kind of team.
+    if (!mux || (mux.kind === 'herdr' && !isHerdr)) return next(e)
     const root = mux.root
 
     const before = await listAgents($, mux)
@@ -403,9 +422,17 @@ export const register: Register = (on, options) => {
       let started = mux.kind === 'herdr' ? parseStarted(stdout) : []
       if (!started.length && before) {
         const after = await listAgents($, mux)
-        if (after) started = newAgents(before, after).filter(a => a.pane !== root)
+        if (after) {
+          started = newAgents(before, after).filter(a => a.pane !== root && (mux.kind === 'herdr' || (a.mux === 'herdr' ? watchHerdr : watchRex)))
+          // A launcher may start the whole team at once. Record its lead; workspace adoption
+          // then puts the new workers beneath that lead instead of beside it under Rex.
+          if (mux.kind === 'rex') {
+            const leads = started.filter(a => a.mux === 'herdr' && a.workspace && roleOf(a.name) === 'lead')
+            started = started.filter(a => a.mux !== 'herdr' || roleOf(a.name) === 'lead' || !leads.some(l => l.workspace === a.workspace))
+          }
+        }
         // A block Rex just made may not run its agent yet: it is recorded by id, named by its label.
-        if (after && mux.kind === 'rex' && namesHarness(command)) {
+        if (after && mux.kind === 'rex' && watchRex && namesHarness(command)) {
           for (const id of parseRexStarted(stdout).filter(id => id !== root && !started.some(a => a.pane === id))) {
             started.push(after.find(a => a.pane === id) ?? rexPlaceholder(id, lastRex.names[id] ?? ''))
           }

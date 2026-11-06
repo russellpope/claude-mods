@@ -19,7 +19,7 @@ describe('parseAgentList', () => {
   test('maps herdr fields and drops rows with no pane', () => {
     const out = JSON.stringify({ id: 'cli:agent:list', result: { type: 'agent_list', agents: [raw('w1:p1', { title: 'DONE: x', tab_id: 'w1:t3' }), { name: 'x' }] } })
     expect(parseAgentList(out)).toEqual([
-      { pane: 'w1:p1', name: 'n-w1:p1', harness: 'claude', status: 'working', title: 'DONE: x', label: 'Doing things', cwd: '/w', workspace: 'w1', session: 's-w1:p1', terminal: 'term-w1:p1', tab: 'w1:t3' },
+      { mux: 'herdr', pane: 'w1:p1', name: 'n-w1:p1', harness: 'claude', status: 'working', title: 'DONE: x', label: 'Doing things', cwd: '/w', workspace: 'w1', session: 's-w1:p1', terminal: 'term-w1:p1', tab: 'w1:t3' },
     ])
   })
 })
