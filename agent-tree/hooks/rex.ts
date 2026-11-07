@@ -141,14 +141,14 @@ export const CODEX_THREAD_ARGV = (home: string, pid: number): string[] => [
 ]
 
 const REX_SPAWN = /(?:^|[;&|(`\n]|\$\(|\b(?:if|then|do|else|time|exec)\s)\s*rex\s+(?:-\S+\s+(?:\S+\s+)?)*(?:run|split|new|window\s+new|send(?!-))\b/
-// The team skills' helper (deepthought skills/lib/rex-team.sh), known by its verb and first argument,
+// The team skills' helper (deepthought skills/lib/rex-team.sh), known by spawn, launch or prompt and its first argument,
 // a session (a variable or a session id), since a lead may call it through any name: a path, a
 // variable, an alias. A false match costs only an agent list before and after.
-const HELPER_SPAWN = /\b(?:spawn|prompt)\s+["']?(?:\$\{?\w+\}?|session:)/
+const HELPER_SPAWN = /\b(?:spawn|launch|prompt)\s+["']?(?:\$\{?\w+\}?|session:)/
 
 /**
  * True when a `rex` command can start an agent: it creates a block (`rex run|split|new|window new`,
- * or the team helper's `spawn`) or types into one (`rex send`, the helper's `prompt`). What runs
+ * or the team helper's `spawn|launch`) or types into one (`rex send`, the helper's `prompt`). What runs
  * there may come from a variable or a script, so the agent list before and after the call decides
  * which agents are new.
  */
