@@ -80,6 +80,7 @@ export const buildTree = (input: TreeInput): { nodes: TreeNode[]; bindings: Reco
         const a = k.agent ?? null
         const name = a?.name || k.prev?.name || k.prev?.pane || ''
         nodes.push({
+          mux: a?.mux ?? k.prev?.mux,
           pane: a?.pane ?? k.prev?.pane ?? '',
           parent: pane,
           depth,
@@ -105,6 +106,7 @@ export const buildTree = (input: TreeInput): { nodes: TreeNode[]; bindings: Reco
       if (holder && bindings[key] === undefined) bindings[key] = holder.terminal
       const prev = previous.find(p => p.pane === e.child && p.startedAt === e.at && !p.inferred)
       nodes.push({
+        mux: holder?.mux ?? prev?.mux,
         pane: e.child,
         parent: e.parent,
         depth,

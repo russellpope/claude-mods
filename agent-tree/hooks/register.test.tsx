@@ -904,3 +904,228 @@ describe('Rex hosts', () => {
     expect(reads).toEqual(['/home/me/.claude/sessions/100.json'])
   })
 })
+
+describe('Rex with herdr teams', () => {
+  const LEAD = { ...agent('wSV:p1', 'b65-lead', 's-lead'), tab_id: 'shared-tab' }
+  const WORKER = { ...agent('wSV:p2', 'b65-impl', 's-worker'), tab_id: 'shared-tab' }
+  const PROPS = { title: 'Agent tree', isFocused: true, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
+  // One on() per event per test: a test that moves the clock or keeps edge files says so here.
+  // `files` holds edge files by path: the ledger lists and reads them, and a test may write them.
+  const setup = (on: Parameters<TestBody>[1], o: { now?: () => number; files?: Map<string, string> } = {}) => {
+    const files = o.files ?? new Map<string, string>()
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: o.now?.() ?? NOW }))
+    on('fs.list', async () => ({ value: [...files.keys()].map(path => ({ name: path.split('/').at(-1) ?? path, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }))
+    on('fs.read', async (_$, e) => ({ value: files.get(e.path) ?? (e.path.endsWith('/100.json') ? '{"sessionId":"root-session"}' : '') }))
+    on('fs.exists', async () => ({ value: false }))
+  }
+
+  test('merged listing keeps both multiplexers on their rows', async ($, on) => {
+    setup(on)
+    on('process.run', async (_$, e) => {
+      if (isRexList(e.argv)) return ok(rexList(rexPane(REX_ROOT, 'owner'), rexPane(REX_CHILD, 'rex-impl')))
+      if (e.argv.join(' ') === 'herdr agent list') return ok(list(LEAD, WORKER))
+      return failed
+    })
+
+    const snap = await openPane($, on)
+
+    expect(snap.error).toBe('')
+    expect(snap.all.map(a => [a.pane, a.mux])).toEqual([[REX_ROOT, 'rex'], [REX_CHILD, 'rex'], ['wSV:p1', 'herdr'], ['wSV:p2', 'herdr']])
+  })
+
+  test('a herdr session under Rex lists herdr only: listing Rex from herdr is off', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', HERDR_PANE_ID: 'w9:p1', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    on('clock.now', async () => ({ value: NOW }))
+    const runs: string[] = []
+    on('process.run', async (_$, e) => {
+      runs.push(e.argv.slice(0, 2).join(' '))
+      if (isRexList(e.argv)) return ok(rexList(rexPane(REX_ROOT, 'owner')))
+      return e.argv.join(' ') === 'herdr agent list' ? ok(list(ROOT, LEAD)) : failed
+    })
+
+    const snap = await openPane($, on)
+
+    expect(snap.all.map(a => [a.pane, a.mux])).toEqual([['w9:p1', 'herdr'], ['wSV:p1', 'herdr']])
+    expect(runs.filter(r => r.startsWith('rex'))).toEqual([])
+  })
+
+  // Both lists gain an agent during the call: each command claims only its own multiplexer's.
+  for (const [command, mux, child] of [
+    ['rex run -s "$REX_SESSION" --label rex-impl --json -- claude', 'rex', REX_CHILD],
+    ['herdr agent start b65-lead --pane wSV:p1', 'herdr', 'wSV:p1'],
+  ] as const) {
+    test(`a ${mux} spawn from Rex records only the new ${mux} agent`, async ($, on) => {
+      setup(on)
+      let rexLists = 0
+      let herdrLists = 0
+      on('process.run', async (_$, e) => {
+        if (isRexList(e.argv)) return ok(rexLists++ === 0 ? rexList(rexPane(REX_ROOT, 'owner')) : rexList(rexPane(REX_ROOT, 'owner'), rexPane(REX_CHILD, 'rex-impl')))
+        if (e.argv.join(' ') === 'herdr agent list') return ok(herdrLists++ === 0 ? list() : list(LEAD))
+        return failed
+      })
+      const writes: string[] = []
+      on('fs.write', async (_$, e) => { writes.push(e.text); return { value: undefined } })
+      on('tool.call', { tool: 'Bash' }, bash(''))
+
+      await $.tool.call({ tool: 'Bash', command })
+
+      expect(writes.map(text => JSON.parse(text).child)).toEqual([child])
+    })
+  }
+
+  // A missing binary and a timeout both reject the run ({ deny }: a hook that throws is skipped).
+  for (const mode of ['absent', 'timeout', 'not running', 'malformed'] as const) {
+    test(`herdr ${mode} leaves the Rex listing usable with the existing timeout`, async ($, on) => {
+      setup(on)
+      const timeouts: (number | undefined)[] = []
+      on('process.run', async (_$, e) => {
+        if (isRexList(e.argv)) return ok(rexList(rexPane(REX_ROOT, 'owner'), rexPane(REX_CHILD, 'rex-impl')))
+        if (e.argv.join(' ') === 'herdr agent list') {
+          timeouts.push(e.init?.timeoutMs)
+          if (mode === 'absent') return { deny: 'spawn herdr ENOENT' }
+          if (mode === 'timeout') return { deny: 'process timed out after 5000 ms' }
+          return mode === 'malformed' ? ok('not json') : failed
+        }
+        return failed
+      })
+
+      const snap = await openPane($, on)
+
+      expect(snap.error).toBe('')
+      expect(snap.all.map(a => a.pane)).toEqual([REX_ROOT, REX_CHILD])
+      expect(timeouts).toEqual([5000])
+    })
+  }
+
+  for (const command of [
+    'herdr agent start b65-lead --pane wSV:p1',
+    'python3 ~/.local/share/kintsugi-session-agent/teams/launch_lane_codex_b65.py',
+    'python3 /tmp/launch_lane.py',
+    'python3 /tmp/launch_workers_codex.py',
+    '~/skills/lib/claude-team.sh spawn',
+    '~/skills/lib/codex-team.sh spawn',
+    '~/skills/lib/rex-team.sh spawn',
+    'herdr workspace create b65',
+  ]) {
+    test(`a Rex call records herdr spawns by list comparison: ${command}`, async ($, on) => {
+      setup(on)
+      let lists = 0
+      on('process.run', async (_$, e) => {
+        if (isRexList(e.argv)) return ok(rexList(rexPane(REX_ROOT, 'owner')))
+        if (e.argv.join(' ') === 'herdr agent list') return ok(lists++ === 0 ? list() : list(LEAD))
+        return failed
+      })
+      const writes: string[] = []
+      on('fs.write', async (_$, e) => { writes.push(e.text); return { value: undefined } })
+      on('tool.call', { tool: 'Bash' }, bash('launcher finished'))
+
+      await $.tool.call({ tool: 'Bash', command })
+
+      expect(writes.map(text => JSON.parse(text))).toEqual([
+        { v: 1, parent: REX_ROOT, parentSession: 'root-session', child: 'wSV:p1', name: 'b65-lead', via: 'claude-mod', at: NOW, session: 'wSV' },
+      ])
+    })
+  }
+
+  test('a launcher starting a whole team records its lead and adopts the workers beneath it', async ($, on) => {
+    const files = new Map<string, string>()
+    setup(on, { files })
+    let launched = false
+    on('fs.write', async (_$, e) => { files.set(e.path, e.text); return { value: undefined } })
+    on('process.run', async (_$, e) => {
+      if (isRexList(e.argv)) return ok(rexList(rexPane(REX_ROOT, 'owner')))
+      // Worker comes first: ordering of the backend response must not pick the team parent.
+      if (e.argv.join(' ') === 'herdr agent list') return ok(launched ? list(WORKER, LEAD) : list())
+      return failed
+    })
+    on('tool.call', { tool: 'Bash' }, async () => { launched = true; return { result: { stdout: '', stderr: '', interrupted: false } } })
+    // Every test hook before the first $ call.
+    const pane = watchPane(on)
+
+    await $.tool.call({ tool: 'Bash', command: 'python3 /tmp/launch_lane_codex_b65.py' })
+    const snap = await pane.open($)
+
+    expect([...files.values()].map(text => JSON.parse(text).child)).toEqual(['wSV:p1'])
+    expect(snap.nodes.map(n => [n.pane, n.parent, n.depth, n.inferred ?? false, n.mux])).toEqual([
+      ['wSV:p1', REX_ROOT, 0, false, 'herdr'], ['wSV:p2', 'wSV:p1', 1, true, 'herdr'],
+    ])
+  })
+
+  test('an existing collector edge adopts herdr workers from a Rex root', async ($, on) => {
+    // Written by hand, as the session agent wrote B65's: another `via`, read like the mod's own.
+    const edge = { v: 1, parent: REX_ROOT, parentSession: 'root-session', child: 'wSV:p1', name: 'b65-lead', via: 'session-agent', at: NOW - 1000, session: 'wSV' }
+    setup(on, { files: new Map([[`/home/me/.local/state/agent-tree/edges/${NOW - 1000}-wSV_p1.json`, JSON.stringify(edge)]]) })
+    on('process.run', async (_$, e) => {
+      if (isRexList(e.argv)) return ok(rexList(rexPane(REX_ROOT, 'owner')))
+      return e.argv.join(' ') === 'herdr agent list' ? ok(list(LEAD, WORKER)) : failed
+    })
+
+    expect((await openPane($, on)).nodes.map(n => [n.pane, n.parent, n.depth])).toEqual([
+      ['wSV:p1', REX_ROOT, 0], ['wSV:p2', 'wSV:p1', 1],
+    ])
+  })
+
+  for (const attached of [true, false]) {
+    test(`herdr focus from Rex uses herdr and ${attached ? 'acknowledges the ding' : 'toasts the unattached-client reason without acknowledging'}`, async ($, on) => {
+      let now = NOW
+      setup(on, { now: () => now })
+      let status = 'working'
+      const focus: (readonly string[])[] = []
+      const toasts: string[] = []
+      on('ui.toast', async (_$, e) => { toasts.push(e.text); return { value: undefined } })
+      on('process.run', async (_$, e) => {
+        if (isRexList(e.argv)) return ok(rexList(rexPane(REX_ROOT, 'owner')))
+        if (e.argv.join(' ') === 'herdr agent list') return ok(list({ ...LEAD, agent_status: status }))
+        if (e.argv[2] === 'focus') {
+          focus.push(e.argv)
+          return attached ? ok('{}') : { value: { exitCode: 1, stdout: '{"error":{"message":"no attached client"}}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+        }
+        return failed
+      })
+      const pane = watchPane(on)
+      await pane.open($)
+      now += 2000
+      status = 'blocked'
+      await pane.open($)
+      const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
+
+      await ui.press({ key: `fd-wSV:p1-${now}` })
+
+      expect(focus).toEqual([['herdr', 'agent', 'focus', 'wSV:p1']])
+      expect(toasts).toEqual(attached ? [] : ['agent-tree: could not focus wSV:p1: no attached client'])
+      expect((await ui.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe(attached ? '▾ Dings · none need you' : '▾ Dings · 1 needs you')
+      await ui.unmount()
+    })
+  }
+
+  test('unnamed dings use their own backend tabs even when tab ids coincide', async ($, on) => {
+    let now = NOW
+    setup(on, { now: () => now })
+    let status = 'working'
+    let tabReads = 0
+    on('process.run', async (_$, e) => {
+      if (isRexList(e.argv)) return ok(JSON.stringify({ panes: [rexPane(REX_ROOT, 'owner'), rexPane(REX_CHILD, 'shell', { window: 'shared-tab', program_status: { records: [{ state: status, app: 'claude-code' }] } })], windows: { 'shared-tab': 'Rex tab' } }))
+      if (e.argv.join(' ') === 'herdr agent list') return ok(list({ ...WORKER, name: '', agent_status: status }))
+      if (e.argv.join(' ') === 'herdr tab list') {
+        tabReads++
+        return ok('{"result":{"tabs":[{"tab_id":"shared-tab","label":"herdr tab"}]}}')
+      }
+      return failed
+    })
+    const pane = watchPane(on)
+    await pane.open($)
+    expect(tabReads).toBe(0)
+    now += 2000
+    status = 'done'
+    await pane.open($)
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
+
+    expect((await ui.find({ type: 'Button', key: `fd-${REX_CHILD}-${now}` }))?.props.label).toMatch(/^Rex tab\s*$/)
+    expect((await ui.find({ type: 'Button', key: `fd-wSV:p2-${now}` }))?.props.label).toMatch(/^herdr tab\s*$/)
+    expect(tabReads).toBe(1)
+    await ui.unmount()
+  })
+})

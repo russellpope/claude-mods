@@ -73,6 +73,7 @@ export const toAgent = (p: RawPane): HerdrAgent | null => {
   const label = p.label ?? ''
   const isSignal = SIGNAL.test(label)
   return {
+    mux: 'rex',
     pane: p.block,
     name: isSignal || label === 'shell' ? '' : label,
     harness,

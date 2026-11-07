@@ -17,6 +17,7 @@ type RawAgent = {
 }
 
 export const toAgent = (r: RawAgent): HerdrAgent => ({
+  mux: 'herdr',
   pane: r.pane_id ?? '',
   name: r.name ?? '',
   harness: r.agent ?? '',
@@ -58,6 +59,10 @@ export const invokesAgentStart = (command: string): boolean => {
   const unquoted = command.replace(/'[^']*'/g, "''").replace(/"(?:[^"\\$]|\\.|\$(?!\())*"/g, '""')
   return /(?:^|[;&|(`\n]|\$\(|\b(?:if|then|do|else|time|exec)\s)\s*herdr\s+agent\s+start\b/.test(unquoted)
 }
+
+/** A script can hide the actual start command. Compare lists even for a mention of these launchers. */
+export const mayStartHerdr = (command: string): boolean =>
+  /\bherdr\b|\blaunch_lane[\w-]*\.py\b|\blaunch_[\w-]*codex[\w-]*\.py\b|\b(?:claude|codex|rex)-team(?:\.sh)?\b/.test(command)
 
 /** Agents in `after` on a pane `before` lacked, or on a pane that now runs another session. */
 export const newAgents = (before: HerdrAgent[], after: HerdrAgent[]): HerdrAgent[] => {
