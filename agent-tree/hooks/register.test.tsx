@@ -705,30 +705,37 @@ const isRexList = (argv: readonly string[]) => argv[0] === 'rex' && argv[1] === 
 const REX_RUN = JSON.stringify({ window_id: `window:${REX_CHILD}`, block_ids: [REX_CHILD], revision: 9 }, null, 2)
 
 describe('Rex', () => {
-  test('rex run output writes one edge, named by the block label, before its agent has started', async ($, on) => {
-    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
-    mock.store(on)
-    on('clock.now', async () => ({ value: NOW }))
-    on('fs.read', async (_$, e) => ({ value: e.path === '/home/me/.claude/sessions/100.json' ? '{"sessionId":"root-session"}' : '' }))
-    const writes: { path: string; text: string }[] = []
-    on('fs.write', async (_$, e) => {
-      writes.push({ path: e.path, text: e.text })
-      return { value: undefined }
-    })
-    let lists = 0
-    on('process.run', async (_$, e) => {
-      if (!isRexList(e.argv)) return failed
-      // The new block still runs its shell: Rex lists it, but not as an agent.
-      return ok(lists++ === 0 ? rexList(rexPane(REX_ROOT, 'shell')) : rexList(rexPane(REX_ROOT, 'shell'), rexPane(REX_CHILD, 'demo-impl', { program_status: { records: [] }, process: { foreground: { pid: 300, name: 'fish', cwd: '/w' } } })))
-    })
-    on('tool.call', { tool: 'Bash' }, bash(REX_RUN))
+  for (const command of [
+    'rex run -s "$REX_SESSION" --label demo-impl --focus=false --json -- claude --permission-mode auto',
+    'sh $R launch "$S" i701-lead $WT claude --lead-gate -- --permission-mode auto --model claude-opus-5-5 --effort high "Read … and carry it out."',
+    '"$REX_TEAM" launch "$TEAM_SESSION" lead "$REPO" codex -- -m gpt-6.1-sol',
+    'sh ~/x/rex-team.sh launch session:01a1b481 w1 /w opencode',
+  ]) {
+    test(`output writes one edge, named by the block label, before its agent has started: ${command}`, async ($, on) => {
+      mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+      mock.store(on)
+      on('clock.now', async () => ({ value: NOW }))
+      on('fs.read', async (_$, e) => ({ value: e.path === '/home/me/.claude/sessions/100.json' ? '{"sessionId":"root-session"}' : '' }))
+      const writes: { path: string; text: string }[] = []
+      on('fs.write', async (_$, e) => {
+        writes.push({ path: e.path, text: e.text })
+        return { value: undefined }
+      })
+      let lists = 0
+      on('process.run', async (_$, e) => {
+        if (!isRexList(e.argv)) return failed
+        // The new block still runs its shell: Rex lists it, but not as an agent.
+        return ok(lists++ === 0 ? rexList(rexPane(REX_ROOT, 'shell')) : rexList(rexPane(REX_ROOT, 'shell'), rexPane(REX_CHILD, 'demo-impl', { program_status: { records: [] }, process: { foreground: { pid: 300, name: 'fish', cwd: '/w' } } })))
+      })
+      on('tool.call', { tool: 'Bash' }, bash(command.startsWith('rex run') ? REX_RUN : `${REX_CHILD}\n`))
 
-    await $.tool.call({ tool: 'Bash', command: 'rex run -s "$REX_SESSION" --label demo-impl --focus=false --json -- claude --permission-mode auto' })
+      await $.tool.call({ tool: 'Bash', command })
 
-    expect(writes).toHaveLength(1)
-    expect(writes[0]?.path).toBe(`/home/me/.local/state/agent-tree/edges/${NOW}-block_01a1_c41d.json`)
-    expect(JSON.parse(writes[0]?.text ?? '')).toMatchObject({ v: 1, parent: REX_ROOT, parentSession: 'root-session', child: REX_CHILD, name: 'demo-impl', via: 'claude-mod' })
-  })
+      expect(writes).toHaveLength(1)
+      expect(writes[0]?.path).toBe(`/home/me/.local/state/agent-tree/edges/${NOW}-block_01a1_c41d.json`)
+      expect(JSON.parse(writes[0]?.text ?? '')).toMatchObject({ v: 1, parent: REX_ROOT, parentSession: 'root-session', child: REX_CHILD, name: 'demo-impl', via: 'claude-mod' })
+    })
+  }
 
   test('rex send of a harness into an existing block: the list diff finds the new agent', async ($, on) => {
     mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })

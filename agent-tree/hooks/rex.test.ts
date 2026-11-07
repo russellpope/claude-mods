@@ -142,7 +142,19 @@ describe('invokesRexSpawn', () => {
   test('negative control: other rex commands, a key press, and text that only mentions it', () => {
     for (const c of ['rex capture -s "$S" -b "$B" --trim', 'rex send-key -s "$S" -b "$B" enter', "echo 'rex run -- claude'", 'grep -r "rex split" docs', 'claude -p hi', '"$REX_TEAM" wait "$S" "$B" 600 done blocked', 'rex-team.sh read "$S" "$B" 40', 'grep -n "spawn" docs/*.md', 'echo spawn the worker next'])
       expect([c, invokesRexSpawn(c)]).toEqual([c, false])
+    expect(invokesRexSpawn('grep -n "launch" docs/*.md')).toBe(false)
   })
+
+  for (const command of [
+    'sh $R launch "$S" i701-lead $WT claude --lead-gate -- --permission-mode auto --model claude-opus-5-5 --effort high "Read … and carry it out."',
+    '"$REX_TEAM" launch "$TEAM_SESSION" lead "$REPO" codex -- -m gpt-6.1-sol',
+    'B=$(sh ~/x/rex-team.sh launch session:01a1b481 w1 /w opencode)',
+  ]) {
+    test(`the team helper launches an agent: ${command}`, () => {
+      expect(invokesRexSpawn(command)).toBe(true)
+      expect(namesHarness(command)).toBe(true)
+    })
+  }
 
   test('namesHarness: claude, codex or opencode as a word', () => {
     expect(['rex run -- claude', 'rex split -- sh -c "codex -m x"', 'rex run -- npm test'].map(namesHarness)).toEqual([true, true, false])
