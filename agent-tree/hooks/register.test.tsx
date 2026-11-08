@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import type { Snapshot } from '../types'
+import type { Ding, Snapshot } from '../types'
 
 const agent = (pane: string, name: string, session: string) => ({
   pane_id: pane,
@@ -108,8 +108,9 @@ describe('Bash spawn hook', () => {
 // Registers the pane's test hooks once (the kit wants every test hook before the first $ call);
 // open() then runs /agent-tree and returns the snapshot the first refresh wrote.
 // `statuses` collects each status line the mod sets.
-const watchPane = (on: Parameters<TestBody>[1], statuses: (string | undefined)[] = []) => {
+const watchPane = (on: Parameters<TestBody>[1], statuses: (string | undefined)[] = [], initialDings?: Ding[]) => {
   let last: Snapshot | undefined
+  let seededDings = false
   on('ui.panes', async () => ({ value: [] }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('ui.status', async (_$, e) => {
@@ -119,6 +120,10 @@ const watchPane = (on: Parameters<TestBody>[1], statuses: (string | undefined)[]
   // Test hooks sit beneath the plugin: this one sees each snapshot write, then lets the kit store it.
   on('state.set', async (_$, e, next) => {
     if (e.plugin === 'agent-tree' && e.key === 'snapshot') last = e.value as Snapshot
+    if (e.plugin === 'agent-tree' && e.key === 'dings' && initialDings && !seededDings) {
+      seededDings = true
+      return next({ ...e, value: initialDings })
+    }
     return next(e)
   })
   return {
@@ -585,10 +590,10 @@ describe('dings', () => {
   test('only the dings that need you are listed, each with its ✓, a ! on its tree row and a count on the status line; the dim one waits in Acknowledged, collapsed', async ($, on) => {
     const { ui, text, label, statuses } = await twoPolls($, on)
 
-    expect(statuses.at(-1)).toBe('tree 0● 1! · 2 need you')
-    expect(await label('s-dings')).toBe('▾ Dings · 2 need you')
+    expect(statuses.at(-1)).toBe('tree 0● 1! · 1 needs you')
+    expect(await label('s-dings')).toBe('▾ Dings · 1 needs you')
     expect(await label('ack-all')).toBe('ack all')
-    expect(await text(`d-wB:p1-${T}`)).toMatch(/^!\s*0s\s*mods\s*finished/)
+    expect(await text(`d-wB:p1-${T}`)).toBeUndefined()
     expect(await text(`d-wL:p3-${T}`)).toMatch(/^!\s*0s\s*l-review\s*asking/)
     expect(await label(`ack-wL:p3-${T}`)).toBe('✓')
     expect(await text(`d-wL:p2-${T}`)).toBeUndefined()
@@ -609,29 +614,22 @@ describe('dings', () => {
     expect(await label(`ack-wL:p2-${T}`)).toBeUndefined()
     await ui.unmount()
     const desktop = await $.ui.mount({ plugin: 'agent-tree', surface: 'desktop', component: 'Pane', requestId: 'agent-tree', props: PROPS })
-    expect((await desktop.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 2 need you')
+    expect((await desktop.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe('▾ Dings · 1 needs you')
     expect(await desktop.find({ type: 'Button', key: `ack-wL:p3-${T}` })).toBeDefined()
     await desktop.unmount()
   })
 
-  test("✓ acks a ding where you are; pressing a ding's name takes you to its pane and acks it", async ($, on) => {
+  test('✓ acknowledges an in-tree ding without focusing; unrelated sessions have no ding to acknowledge', async ($, on) => {
     const { ui, text, label, focused, statuses } = await twoPolls($, on)
 
-    await ui.press({ key: `ack-wB:p1-${T}` })
+    expect(await label(`ack-wB:p1-${T}`)).toBeUndefined()
+    await ui.press({ key: `ack-wL:p3-${T}` })
 
     expect(focused).toEqual([])
-    expect(statuses.at(-1)).toBe('tree 0● 1! · 1 needs you')
-    expect(await label('s-dings')).toBe('▾ Dings · 1 needs you')
-    expect(await text(`d-wB:p1-${T}`)).toBeUndefined()
-    expect(await label('s-acked')).toBe('▸ Acknowledged · 2')
-
-    await ui.press({ key: `fd-wL:p3-${T}` })
-
-    expect(focused).toEqual(['wL:p3'])
     expect(statuses.at(-1)).toBe('tree 0● 1!')
     expect(await label('s-dings')).toBe('▾ Dings · none need you')
     expect(await label('ack-all')).toBeUndefined()
-    expect(await label('s-acked')).toBe('▸ Acknowledged · 3')
+    expect(await label('s-acked')).toBe('▸ Acknowledged · 2')
     await ui.unmount()
   })
 
@@ -643,14 +641,15 @@ describe('dings', () => {
     expect(focused).toEqual([])
     expect(statuses.at(-1)).toBe('tree 0● 1!')
     expect(await label('s-dings')).toBe('▾ Dings · none need you')
-    expect(await label('s-acked')).toBe('▸ Acknowledged · 3')
+    expect(await label('s-acked')).toBe('▸ Acknowledged · 2')
     await ui.unmount()
   })
 
   test('on the terminal a name fills its cell, at least 12 wide, so a short one is not a one-character target; the desktop draws names as they are', async ($, on) => {
     const { ui, label } = await twoPolls($, on)
 
-    expect(await label(`fd-wB:p1-${T}`)).toBe('mods        ')
+    expect(await label(`fd-wB:p1-${T}`)).toBeUndefined()
+    expect(await label(`fd-wL:p3-${T}`)).toBe('l-review    ')
     expect(await label(`f-wL:p1-${NOW - 5000}`)).toBe('lead-l      ')
     // A worker's cell is the column less its tree prefix ('├ ').
     expect(await label(`f-wL:p3-${NOW - 3000}`)).toBe('l-review  ')
@@ -658,7 +657,7 @@ describe('dings', () => {
     expect(await label('fa-wB:p1')).toBe('wB:p1       ')
     await ui.unmount()
     const desktop = await $.ui.mount({ plugin: 'agent-tree', surface: 'desktop', component: 'Pane', requestId: 'agent-tree', props: PROPS })
-    expect((await desktop.find({ type: 'Button', key: `fd-wB:p1-${T}` }))?.props.label).toBe('mods')
+    expect((await desktop.find({ type: 'Button', key: `fd-wL:p3-${T}` }))?.props.label).toBe('l-review')
     await desktop.unmount()
   })
 
@@ -703,6 +702,110 @@ const REX_CHILD = 'block:01a1-c41d'
 const rexList = (...panes: ReturnType<typeof rexPane>[]) => JSON.stringify({ panes, windows: { [`window:${REX_CHILD}`]: 'team' } })
 const isRexList = (argv: readonly string[]) => argv[0] === 'rex' && argv[1] === 'do' && argv[2] === '-e'
 const REX_RUN = JSON.stringify({ window_id: `window:${REX_CHILD}`, block_ids: [REX_CHILD], revision: 9 }, null, 2)
+
+describe('Rex subtree blocked scope', () => {
+  test('a refresh removes unrelated open dings retained from the global log', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    let now = NOW
+    on('clock.now', async () => ({ value: now }))
+    on('fs.list', async () => ({ value: [] }))
+    on('fs.read', async () => ({ value: '' }))
+    on('process.run', async (_$, e) => isRexList(e.argv) ? ok(rexList(
+      rexPane(REX_ROOT, 'owner'),
+      rexPane('block:legacy-outside', 'grilling', { session: 'session:legacy-outside', program_status: { records: [{ state: 'blocked', app: 'claude-code' }] } }),
+    )) : failed)
+    const statuses: (string | undefined)[] = []
+    const pane = watchPane(on, statuses, [{ at: NOW - 2000, pane: 'block:legacy-outside', terminal: 'block:legacy-outside#200', name: 'grilling', kind: 'asking', title: '', why: '', needsYou: true, isOpen: true }])
+    await pane.open($)
+    now += 2000
+    await pane.open($)
+    expect(statuses.at(-1)).toBeUndefined()
+    const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: true, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} } })
+    expect(await ui.find({ type: 'Button', key: 's-dings' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  for (const scope of ['unrelated only', 'recorded grandchild', 'adopted grandchild']) {
+    test(`two unrelated blocked sessions contribute zero needs-you dings: ${scope}`, async ($, on) => {
+      mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+      mock.store(on)
+      let now = NOW
+      on('clock.now', async () => ({ value: now }))
+      const grandchild = 'block:ding-grandchild'
+      const edges = [
+        { v: 1, parent: REX_ROOT, parentSession: '', child: REX_CHILD, name: 'ding-impl', via: 'rex-team', at: NOW - 1000 },
+        ...(scope === 'recorded grandchild' ? [{ v: 1, parent: REX_CHILD, parentSession: '', child: grandchild, name: 'ding-reviewer', via: 'rex-team', at: NOW - 500 }] : []),
+      ]
+      const files = new Map(edges.map(e => [`/home/me/.local/state/agent-tree/edges/${e.at}-${e.child.replace(/[^A-Za-z0-9]/g, '_')}.json`, JSON.stringify(e)]))
+      on('fs.list', async () => ({ value: [...files.keys()].map(path => ({ name: path.split('/').at(-1) ?? '', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }))
+      on('fs.read', async (_$, e) => ({ value: files.get(e.path) ?? '' }))
+      on('fs.exists', async () => ({ value: false }))
+      const status = () => ({ records: [{ state: now === NOW ? 'working' : 'blocked', app: 'claude-code' }] })
+      on('process.run', async (_$, e) => isRexList(e.argv) ? ok(rexList(
+        rexPane(REX_ROOT, 'owner'),
+        rexPane(REX_CHILD, 'ding-impl', { session: 'session:ding-team', program_status: { records: [{ state: 'working', app: 'claude-code' }] } }),
+        ...(scope !== 'unrelated only' ? [rexPane(grandchild, 'ding-reviewer', { session: scope === 'adopted grandchild' ? 'session:ding-team' : 'session:ding-review', program_status: status() })] : []),
+        rexPane('block:ding-unrelated-a', 'grilling-a', { session: 'session:grilling-a', program_status: status() }),
+        rexPane('block:ding-unrelated-b', 'grilling-b', { session: 'session:grilling-b', program_status: status() }),
+      )) : failed)
+      const statuses: (string | undefined)[] = []
+      const pane = watchPane(on, statuses)
+      await pane.open($)
+      now += 2000
+      await pane.open($)
+      expect(statuses.at(-1)).toBe(scope === 'unrelated only' ? 'tree 1●' : 'tree 1● 1! · 1 needs you')
+      const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: true, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} } })
+      expect((await ui.find({ type: 'Button', key: 's-dings' }))?.props.label).toBe(scope === 'unrelated only' ? undefined : '▾ Dings · 1 needs you')
+      if (scope !== 'unrelated only') {
+        await ui.press({ key: 'ack-all' })
+        expect(statuses.at(-1)).toBe('tree 1● 1!')
+      }
+      await ui.unmount()
+    })
+  }
+
+  for (const c of [
+    { label: 'unrelated blocked sessions', child: 'working', grandchild: '', wantMood: 'typing', wantCounts: '1 working', wantStatus: 'tree 1●' },
+    { label: 'blocked child', child: 'blocked', grandchild: '', wantMood: 'blocked', wantCounts: '1 blocked', wantStatus: 'tree 0● 1!' },
+    { label: 'blocked recorded grandchild', child: 'working', grandchild: 'recorded', wantMood: 'blocked', wantCounts: '1 working · 1 blocked', wantStatus: 'tree 1● 1!' },
+    { label: 'blocked adopted grandchild', child: 'working', grandchild: 'adopted', wantMood: 'blocked', wantCounts: '1 working · 1 blocked', wantStatus: 'tree 1● 1!' },
+  ]) {
+    test(`${c.label}: mood and counts use only the root subtree in Tree and All views`, async ($, on) => {
+      mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+      mock.store(on)
+      on('clock.now', async () => ({ value: NOW }))
+      const grandchild = 'block:scope-grandchild'
+      const edges = [
+        { v: 1, parent: REX_ROOT, parentSession: '', child: REX_CHILD, name: 'scope-impl', via: 'rex-team', at: NOW - 1000 },
+        ...(c.grandchild === 'recorded' ? [{ v: 1, parent: REX_CHILD, parentSession: '', child: grandchild, name: 'scope-reviewer', via: 'rex-team', at: NOW - 500 }] : []),
+      ]
+      const files = new Map(edges.map(e => [`/home/me/.local/state/agent-tree/edges/${e.at}-${e.child.replace(/[^A-Za-z0-9]/g, '_')}.json`, JSON.stringify(e)]))
+      on('fs.list', async () => ({ value: [...files.keys()].map(path => ({ name: path.split('/').at(-1) ?? '', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }))
+      on('fs.read', async (_$, e) => ({ value: files.get(e.path) ?? '' }))
+      on('fs.exists', async () => ({ value: false }))
+      const status = (state: string) => ({ records: [{ state, app: 'claude-code' }] })
+      on('process.run', async (_$, e) => isRexList(e.argv) ? ok(rexList(
+        rexPane(REX_ROOT, 'owner'),
+        rexPane(REX_CHILD, 'scope-impl', { session: 'session:scope-team', program_status: status(c.child) }),
+        ...(c.grandchild ? [rexPane(grandchild, 'scope-reviewer', { session: c.grandchild === 'adopted' ? 'session:scope-team' : 'session:scope-review', program_status: status('blocked') })] : []),
+        rexPane('block:unrelated-a', 'grilling-a', { session: 'session:unrelated-a', process: { foreground: { pid: 301, name: 'claude', cwd: '/other/project-a' } }, program_status: status('blocked') }),
+        rexPane('block:unrelated-b', 'grilling-b', { session: 'session:unrelated-b', process: { foreground: { pid: 302, name: 'claude', cwd: '/other/project-b' } }, program_status: status('blocked') }),
+      )) : failed)
+      const statuses: (string | undefined)[] = []
+      const snap = await watchPane(on, statuses).open($)
+      expect(snap.nodes.map(n => n.pane)).toEqual(c.grandchild ? [REX_CHILD, grandchild] : [REX_CHILD])
+      expect(snap.all.filter(a => a.status === 'blocked')).toHaveLength(c.child === 'blocked' || c.grandchild ? 3 : 2)
+      expect(statuses.at(-1)).toBe(c.wantStatus)
+      const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: { title: 'Agent tree', isFocused: true, bodyColumns: 120, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} } })
+      expect(await ui.find({ type: 'Text', text: new RegExp(`^${c.wantMood} · ${c.wantCounts}$`) })).toBeDefined()
+      await ui.press({ key: 'm-all' })
+      expect((await ui.find({ type: 'Box', key: 'all' }))?.text).toContain('grilling-a')
+      expect(await ui.find({ type: 'Text', text: new RegExp(`^${c.wantMood} · ${c.wantCounts}$`) })).toBeDefined()
+      await ui.unmount()
+    })
+  }
+})
 
 describe('Rex edge deduplication', () => {
   for (const c of [
@@ -1163,7 +1266,8 @@ describe('Rex with herdr teams', () => {
   for (const attached of [true, false]) {
     test(`herdr focus from Rex uses herdr and ${attached ? 'acknowledges the ding' : 'toasts the unattached-client reason without acknowledging'}`, async ($, on) => {
       let now = NOW
-      setup(on, { now: () => now })
+      const edge = { v: 1, parent: REX_ROOT, parentSession: '', child: 'wSV:p1', name: 'b65-lead', via: 'rex-team', at: NOW - 1000 }
+      setup(on, { now: () => now, files: new Map([[`/home/me/.local/state/agent-tree/edges/${edge.at}-wSV_p1.json`, JSON.stringify(edge)]]) })
       let status = 'working'
       const focus: (readonly string[])[] = []
       const toasts: string[] = []
@@ -1195,7 +1299,11 @@ describe('Rex with herdr teams', () => {
 
   test('unnamed dings use their own backend tabs even when tab ids coincide', async ($, on) => {
     let now = NOW
-    setup(on, { now: () => now })
+    const files = new Map([REX_CHILD, 'wSV:p2'].map((child, i) => {
+      const at = NOW - 1000 + i
+      return [`/home/me/.local/state/agent-tree/edges/${at}-${child.replace(/[^A-Za-z0-9]/g, '_')}.json`, JSON.stringify({ v: 1, parent: REX_ROOT, parentSession: '', child, name: '', via: 'rex-team', at })]
+    }))
+    setup(on, { now: () => now, files })
     let status = 'working'
     let tabReads = 0
     on('process.run', async (_$, e) => {
@@ -1211,7 +1319,7 @@ describe('Rex with herdr teams', () => {
     await pane.open($)
     expect(tabReads).toBe(0)
     now += 2000
-    status = 'done'
+    status = 'blocked'
     await pane.open($)
     const ui = await $.ui.mount({ plugin: 'agent-tree', surface: 'terminal', component: 'Pane', requestId: 'agent-tree', props: PROPS })
 

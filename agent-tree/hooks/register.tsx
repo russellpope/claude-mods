@@ -355,12 +355,14 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
   const stored = ((await $.store.get('bindings').catch(() => undefined)) ?? {}) as Record<string, string>
   const prev = await read($, snapshot)
   const built = buildTree({ root, edges, agents, bindings: stored, previous: prev.nodes, at })
+  const treePanes = new Set(built.nodes.map(n => n.pane))
+  const presentTreePanes = new Set(built.nodes.filter(n => n.status !== 'gone').map(n => n.pane))
   if (Object.keys(built.bindings).length !== Object.keys(stored).length) {
     const latest = ((await $.store.get('bindings').catch(() => undefined)) ?? {}) as Record<string, string>
     await $.store.set('bindings', { ...built.bindings, ...latest }).catch(() => undefined)
   }
   // A list from before an error is stale: the turns since then were never seen.
-  let found = findDings({ prev: prev.all, prevAt: prev.error ? 0 : prev.at, next: agents, at, root, parents: parentsOf(edges, built.nodes) })
+  let found = findDings({ prev: prev.all, prevAt: prev.error ? 0 : prev.at, next: agents, at, root, parents: parentsOf(edges, built.nodes) }).filter(d => presentTreePanes.has(d.pane))
   // Tab ids belong to a backend: identical ids in the two lists must not exchange labels.
   for (const kind of ['rex', 'herdr'] as const) {
     const group = agents.filter(a => a.mux === kind)
@@ -369,7 +371,8 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
     const named = new Map(nameDings(unnamed, group, await tabLabels($, kind)).map(d => [d.pane, d]))
     found = found.map(d => named.get(d.pane) ?? d)
   }
-  const log = await update($, dings, l => settleDings(addDings(l, found), agents))
+  // A reload can retain dings from before they were scoped to this session's tree.
+  const log = await update($, dings, l => settleDings(addDings(l.filter(d => treePanes.has(d.pane)), found), agents.filter(a => presentTreePanes.has(a.pane))))
   let nodes = built.nodes
   let repos = prev.repos
   let batch = prev.batch
