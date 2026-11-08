@@ -144,13 +144,18 @@ export async function loadEdges($: EngineInterface, home: string, at: number): P
   return edges
 }
 
-export async function recordEdges($: EngineInterface, root: string, parentSession: string, started: HerdrAgent[]): Promise<void> {
+export async function recordEdges($: EngineInterface, root: string, parentSession: string, started: HerdrAgent[], since: number): Promise<void> {
   const home = (await $.env.get('HOME')) ?? ''
   const at = await $.clock.now()
+  // rex-team writes before Bash returns. Re-read the ledger, not just our cache,
+  // so the hook does not turn that same spawn into a second incarnation.
+  const recent = await loadEdges($, home, at)
   for (const child of started) {
+    if (recent.some(e => e.parent === root && e.child === child.pane && e.server === child.server && e.at >= since && e.at <= at && at - e.at <= 180_000)) continue
     const edge = makeEdge(root, parentSession, child, at)
     await $.fs.write(`${ledgerDir(home)}/${edgeFileName(edge)}`, JSON.stringify(edge))
     edgeCache.set(edgeFileName(edge), edge)
+    recent.push(edge)
   }
   await update($, edgeCount, n => n + started.length)
   const p = await read($, panel)
@@ -415,6 +420,7 @@ export const register: Register = (on, options) => {
     const root = mux.root
 
     const before = await listAgents($, mux)
+    const since = await $.clock.now()
     const res = await next(e)
     try {
       const out = res.result as { stdout?: unknown } | undefined
@@ -440,7 +446,7 @@ export const register: Register = (on, options) => {
       }
       if (started.length) {
         const parentSession = before?.find(a => a.pane === root)?.session ?? ''
-        await recordEdges($, root, parentSession, started)
+        await recordEdges($, root, parentSession, started, since)
       }
     } catch {
       $.ui.toast('agent-tree: the new worker was not recorded')

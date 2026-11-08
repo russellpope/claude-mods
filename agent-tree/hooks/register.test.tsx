@@ -704,6 +704,91 @@ const rexList = (...panes: ReturnType<typeof rexPane>[]) => JSON.stringify({ pan
 const isRexList = (argv: readonly string[]) => argv[0] === 'rex' && argv[1] === 'do' && argv[2] === '-e'
 const REX_RUN = JSON.stringify({ window_id: `window:${REX_CHILD}`, block_ids: [REX_CHILD], revision: 9 }, null, 2)
 
+describe('Rex edge deduplication', () => {
+  for (const c of [
+    { label: 'recent rex-team edge', age: 1234, parent: REX_ROOT, child: REX_CHILD, via: 'rex-team', server: '', writes: 0 },
+    { label: 'same remote server', age: 1334, parent: REX_ROOT, child: REX_CHILD, via: 'rex-team', server: 'remote', childServer: 'remote', writes: 0 },
+    { label: 'hook edge predating this call', age: 2234, parent: REX_ROOT, child: REX_CHILD, via: 'claude-mod', server: '', writes: 1 },
+    { label: 'script edge predating this call', age: 2500, parent: REX_ROOT, child: REX_CHILD, via: 'rex-team', server: '', writes: 1 },
+    { label: 'older incarnation', age: 180001, parent: REX_ROOT, child: REX_CHILD, via: 'rex-team', server: '', writes: 1 },
+    { label: 'different parent', age: 334, parent: 'block:other', child: REX_CHILD, via: 'rex-team', server: '', writes: 1 },
+    { label: 'different child', age: 434, parent: REX_ROOT, child: 'block:other', via: 'rex-team', server: '', writes: 1 },
+    { label: 'different server', age: 534, parent: REX_ROOT, child: REX_CHILD, via: 'rex-team', server: 'remote', writes: 1 },
+  ]) {
+    test(`${c.label}: hook writes ${c.writes} new edges`, async ($, on) => {
+      mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+      mock.store(on)
+      let now = NOW - 2000
+      on('clock.now', async () => ({ value: now }))
+      const existing = { v: 1, parent: c.parent, parentSession: '', child: c.child, name: 'demo-impl', via: c.via, at: NOW - c.age, session: 'session:team', ...(c.server ? { server: c.server } : {}) }
+      const file = `${existing.at}-${c.child.replace(/[^A-Za-z0-9]/g, '_')}.json`
+      const files = new Map([[`/home/me/.local/state/agent-tree/edges/${file}`, JSON.stringify(existing)]])
+      on('fs.list', async () => ({ value: [...files.keys()].map(path => ({ name: path.split('/').at(-1) ?? '', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }))
+      on('fs.read', async (_$, e) => ({ value: files.get(e.path) ?? '' }))
+      on('fs.exists', async () => ({ value: false }))
+      let writes = 0
+      on('fs.write', async (_$, e) => {
+        writes++
+        files.set(e.path, e.text)
+        return { value: undefined }
+      })
+      let lists = 0
+      on('process.run', async (_$, e) => {
+        if (!isRexList(e.argv)) return failed
+        const child = rexPane(REX_CHILD, 'demo-impl', { session: 'session:team', ...(c.childServer ? { server: c.childServer } : {}) })
+        return ok(lists++ === 0 ? rexList(rexPane(REX_ROOT, 'owner')) : rexList(rexPane(REX_ROOT, 'owner'), child))
+      })
+      on('tool.call', { tool: 'Bash' }, async () => {
+        now = NOW
+        return { result: { stdout: `${REX_CHILD}\n`, stderr: '', interrupted: false } }
+      })
+      const pane = watchPane(on)
+
+      await $.tool.call({ tool: 'Bash', command: 'sh ~/x/rex-team.sh launch session:team demo-impl /w codex --' })
+
+      expect(writes).toBe(c.writes)
+      if (c.writes === 0) {
+        const snap = await pane.open($)
+        expect(snap.nodes.filter(n => n.pane === REX_CHILD)).toHaveLength(1)
+        expect(snap.nodes.find(n => n.pane === REX_CHILD)?.status).toBe('idle')
+      }
+    })
+  }
+
+  test('a worker restarted in the same block keeps a separate incarnation', async ($, on) => {
+    mock.env(on, { HOME: '/home/me', REX_BLOCK: REX_ROOT })
+    mock.store(on)
+    let restarted = false
+    on('clock.now', async () => ({ value: restarted ? NOW : NOW - 2000 }))
+    const file = `/home/me/.local/state/agent-tree/edges/${NOW - 3000}-block_01a1_c41d.json`
+    const files = new Map([[file, JSON.stringify({ v: 1, parent: REX_ROOT, parentSession: '', child: REX_CHILD, name: 'demo-impl', via: 'rex-team', at: NOW - 3000, session: 'session:team' })]])
+    on('fs.list', async () => ({ value: [...files.keys()].map(path => ({ name: path.split('/').at(-1) ?? '', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }))
+    on('fs.read', async (_$, e) => ({ value: files.get(e.path) ?? (e.path.endsWith('/200.json') ? '{"sessionId":"old-session"}' : e.path.endsWith('/201.json') ? '{"sessionId":"new-session"}' : '') }))
+    on('fs.exists', async () => ({ value: false }))
+    on('fs.write', async (_$, e) => {
+      files.set(e.path, e.text)
+      return { value: undefined }
+    })
+    on('process.run', async (_$, e) => isRexList(e.argv)
+      ? ok(rexList(rexPane(REX_ROOT, 'owner'), rexPane(REX_CHILD, 'demo-impl', { session: 'session:team', process: { foreground: { pid: restarted ? 201 : 200, name: 'claude', cwd: '/w' } } })))
+      : failed)
+    on('tool.call', { tool: 'Bash' }, async () => {
+      restarted = true
+      return { result: { stdout: '', stderr: '', interrupted: false } }
+    })
+    const pane = watchPane(on)
+    expect((await pane.open($)).nodes.find(n => n.pane === REX_CHILD)?.session).toBe('old-session')
+
+    await $.tool.call({ tool: 'Bash', command: 'rex send -s session:team -b block:01a1-c41d claude' })
+
+    const nodes = (await pane.open($)).nodes.filter(n => n.pane === REX_CHILD)
+    expect(nodes.map(n => [n.status, n.startedAt, n.session])).toEqual([
+      ['gone', NOW - 3000, 'old-session'],
+      ['idle', NOW, 'new-session'],
+    ])
+  })
+})
+
 describe('Rex', () => {
   for (const command of [
     'rex run -s "$REX_SESSION" --label demo-impl --focus=false --json -- claude --permission-mode auto',

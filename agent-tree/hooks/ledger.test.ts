@@ -22,6 +22,11 @@ describe('ledger', () => {
     expect(parseEdge(JSON.stringify(e))).toEqual(e)
   })
 
+  test('parseEdge accepts the rex-team writer and its cross-session link', () => {
+    const e = { v: 1, parent: 'block:lead', parentSession: '', child: 'block:worker', name: 'i710-implementer', via: 'rex-team', at: 1791486939000, session: 'session:team' }
+    expect(parseEdge(JSON.stringify(e))).toEqual(e)
+  })
+
   test('a Rex child on another host keeps its session and server in the edge', () => {
     const e = makeEdge('block:root', 'sess', { ...child, pane: 'block:c1', workspace: 'session:s9', server: 'linux-box' }, 5)
     expect(e).toMatchObject({ child: 'block:c1', session: 'session:s9', server: 'linux-box' })
