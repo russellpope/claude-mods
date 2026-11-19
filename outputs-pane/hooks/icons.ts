@@ -45,6 +45,47 @@ const BY_EXT: Record<string, Icon> = {
   pdf: { glyph: '', color: '#e06c75' },
 }
 
+// Built things that are neither plans nor code, by family: each gets its family's file glyph.
+const FAMILIES: [string[], Icon][] = [
+  [['pptx', 'ppt', 'key', 'odp'], { glyph: '', color: '#d24726' }],
+  [['docx', 'doc', 'pages', 'odt', 'rtf'], { glyph: '', color: '#2b579a' }],
+  [['xlsx', 'xls', 'numbers', 'ods'], { glyph: '', color: '#217346' }],
+  [['jpeg', 'gif', 'webp', 'heic', 'ico', 'bmp', 'tif', 'tiff', 'avif'], { glyph: '', color: '#a074c4' }],
+  [['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'], { glyph: '', color: '#fd971f' }],
+  [['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac', 'aiff'], { glyph: '', color: '#ee82ee' }],
+  [['zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'zst', '7z', 'rar', 'dmg', 'pkg'], { glyph: '', color: '#eca517' }],
+  [['ttf', 'otf', 'woff', 'woff2'], { glyph: '', color: '#c0c4cc' }],
+]
+for (const [exts, icon] of FAMILIES) for (const ext of exts) BY_EXT[ext] ??= icon
+
+// Code: source, config and markup extensions. Everything not code or planning goes to misc.
+const CODE_EXTS = new Set([
+  'rs', 'ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'py', 'pyi', 'go', 'rb', 'java', 'kt', 'kts', 'scala',
+  'swift', 'm', 'mm', 'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'cs', 'fs', 'php', 'pl', 'pm', 'lua', 'r', 'jl',
+  'dart', 'ex', 'exs', 'erl', 'hs', 'ml', 'mli', 'clj', 'cljs', 'elm', 'nim', 'zig', 'vue', 'svelte', 'astro',
+  'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd', 'nu', 'awk', 'sed',
+  'json', 'jsonc', 'json5', 'jsonl', 'toml', 'yaml', 'yml', 'ini', 'cfg', 'conf', 'properties', 'env', 'plist',
+  'lock', 'tf', 'hcl', 'nix', 'gradle', 'cmake', 'mk', 'kdl', 'proto', 'graphql', 'gql', 'sql', 'prisma',
+  'html', 'htm', 'xml', 'xsl', 'css', 'scss', 'sass', 'less', 'tex', 'rst', 'adoc', 'org',
+  'diff', 'patch', 'ipynb', 'd',
+])
+// Code files with no extension, by name.
+const CODE_NAMES = new Set([
+  'makefile', 'gnumakefile', 'dockerfile', 'containerfile', 'justfile', 'rakefile', 'gemfile', 'procfile',
+  'vagrantfile', 'brewfile', 'podfile', 'jenkinsfile', 'caddyfile', 'license', 'licence', 'copying', 'readme',
+  'codeowners', 'owners', 'notice', 'authors',
+])
+
+// A known source, config or markup extension, a known extensionless name, or a dotfile.
+export const isCode = (path: string) => {
+  const name = (path.split('/').pop() ?? path).toLowerCase()
+  if (CODE_NAMES.has(name) || name.startsWith('.')) return true
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return CODE_NAMES.has(name.replace(/[-_.].*$/, ''))
+
+  return CODE_EXTS.has(name.slice(dot + 1))
+}
+
 export const iconFor = (path: string): Icon => {
   const name = (path.split('/').pop() ?? path).toLowerCase()
   if (BY_NAME[name]) return BY_NAME[name]

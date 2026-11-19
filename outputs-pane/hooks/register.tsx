@@ -1,8 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { OutputFile, Section } from '../types'
-import { iconFor } from './icons'
+import type { OutputFile, Section, Ship } from '../types'
+import { globList, globWords } from './globs'
+import { iconFor, isCode } from './icons'
+import { birthArgv, findArgv, isSkipped, kindOf, namedPaths, parseBirths, SCAN_CAP, SCAN_TIMEOUT_MS, stampOf } from './scan'
+import { defaultBranchOf, isShipped, parseBranches, parseStatus, parseWorktrees, shipLine, shipOf, shipStatus } from './ship'
 
 const PANE = 'outputs'
 const TITLE = 'Outputs'
@@ -21,29 +24,37 @@ const folded = atom({ plugin: 'outputs-pane', key: 'folded' } as const, ['scratc
 const query = atom({ plugin: 'outputs-pane', key: 'query' } as const, '')
 // The Rex block of the last viewer split, closed before the next one opens.
 const viewer = atom({ plugin: 'outputs-pane', key: 'viewer' } as const, '')
+// The working directory's ship state; null outside a git repository or when git fails.
+const ship = atom({ plugin: 'outputs-pane', key: 'ship' } as const, null)
+// Whether the ship line is unfolded to the names behind its counts.
+const shipOpen = atom({ plugin: 'outputs-pane', key: 'shipOpen' } as const, false)
+// How often the open pane rereads git, and how long each git read may take.
+const SHIP_POLL_MS = 30_000
+const GIT_TIMEOUT_MS = 3000
+const MISC_TINT = '#d19a66'
 
 const SECTIONS: { id: Section; label: string; glyph: string; color: string }[] = [
   { id: 'planning', label: 'planning', glyph: '', color: '#c678dd' },
   { id: 'code', label: 'code', glyph: '', color: '#56b6c2' },
+  { id: 'misc', label: 'misc', glyph: '', color: MISC_TINT },
   { id: 'scratch', label: 'scratch', glyph: '', color: '#7a7f88' },
 ]
 const PLANNING = /\.(md|mdx|markdown|txt)$/i
 
-// One glob of the scratch setting, matched against a file name: * and ? are wildcards, the rest is literal.
-const globToRegExp = (glob: string) =>
-  new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i')
-
 // The scratch setting is a comma-separated list of globs: blank means none, unset means msg-*.
-export const scratchPatterns = (setting: unknown) =>
-  (typeof setting === 'string' ? setting : DEFAULT_SCRATCH)
-    .split(',').map(glob => glob.trim()).filter(Boolean).map(globToRegExp)
+export const scratchPatterns = (setting: unknown) => globList(setting, DEFAULT_SCRATCH)
 
-// A scratch name wins over the extension; then markdown and text are planning, the rest code.
+// What a file is, by name alone: markdown and text are planning, known source, config and markup is code
+// (see icons.ts), and everything else (office files, media, archives, binaries, data) is misc.
+export const fileKind = (path: string): Exclude<Section, 'scratch'> =>
+  PLANNING.test(path) ? 'planning' : isCode(path) ? 'code' : 'misc'
+
+// One classifier for every file, however it was made: a scratch name wins, then the file's kind.
 export const sectionOf = (path: string, scratch: readonly RegExp[] = []): Section => {
   const name = path.split('/').pop() ?? path
   if (scratch.some(pattern => pattern.test(name))) return 'scratch'
 
-  return PLANNING.test(path) ? 'planning' : 'code'
+  return fileKind(path)
 }
 
 // The filter matches the path as the pane shows it; a blank filter matches everything.
@@ -89,6 +100,93 @@ export const viewerArgv = (options: Record<string, unknown>, path: string) => {
   return [...(words.length > 0 ? words : isPlanning ? DEFAULT_MARKDOWN_VIEWER : DEFAULT_CODE_VIEWER), path]
 }
 
+// The miscOpener setting is a command line like the editor's; blank is the platform's opener: `open` on
+// macOS (and wherever the platform is unknown), `xdg-open` on Linux, which has no `open` of that kind.
+export const miscArgv = (setting: unknown, path: string, platform: string | undefined) => {
+  const words = (typeof setting === 'string' ? setting : '').trim().split(/\s+/).filter(Boolean)
+  const fallback = platform === 'linux' || platform === 'wsl' ? 'xdg-open' : 'open'
+
+  return [...(words.length > 0 ? words : [fallback]), path]
+}
+
+const platformOf = async ($: EngineInterface) => (await $.session.info().catch(() => undefined))?.platform
+
+// After a Bash call: one find for files under the working directory modified since the call began, plus the
+// absolute and ~ paths its command names. A failed or slow listing lists nothing. Returns whether a file
+// landed in misc.
+async function listBashFiles($: EngineInterface, command: string, startedAt: number, options: Record<string, unknown>) {
+  const cwd = await $.session.cwd()
+  const home = (await $.env.get('HOME').catch(() => undefined)) ?? cwd.match(/^\/(Users|home)\/[^/]+/)?.[0] ?? ''
+  const ignore = globList(options.ignore)
+  const stamp = stampOf(startedAt)
+  const stampMs = Math.floor(startedAt / 1000) * 1000
+
+  const listing = await $.process.run(findArgv(cwd, stamp, globWords(options.ignore)), { env: { TZ: 'UTC' }, timeoutMs: SCAN_TIMEOUT_MS })
+    .catch(() => undefined)
+  if (!listing || listing.exitCode !== 0 || listing.isStdoutTruncated) return false
+  const found = listing.stdout.split('\n').filter(line => line.startsWith('/') && !isSkipped(line, ignore))
+  const scanned = found.length > SCAN_CAP ? [] : found
+
+  const named: string[] = []
+  for (const path of namedPaths(command, home)) {
+    if (scanned.includes(path) || isSkipped(path, ignore)) continue
+    const stat = await $.fs.stat(path).catch(() => undefined)
+    if (stat?.kind === 'file' && stat.mtimeMs >= stampMs) named.push(path)
+  }
+
+  const paths = [...scanned, ...named]
+  if (paths.length === 0) return false
+  const argv = birthArgv(await platformOf($), paths)
+  const births = argv
+    ? parseBirths((await $.process.run(argv, { timeoutMs: SCAN_TIMEOUT_MS }).catch(() => undefined))?.stdout ?? '')
+    : new Map<string, number>()
+  const at = Date.now()
+  await update($, files, list => paths.reduce((next, path) =>
+    remember(next, path, kindOf(births.get(path), stampMs, next.find(one => one.path === path)?.kind), at), list))
+  const scratch = scratchPatterns(options.scratch)
+
+  return paths.some(path => sectionOf(path, scratch) === 'misc')
+}
+
+// Local git reads only, each with a short timeout and optional locks off, so nothing is written: never a
+// fetch, so "behind" is as of the last fetch. Undefined outside a git repository or when git fails.
+async function readShip($: EngineInterface, options: Record<string, unknown>): Promise<Ship | undefined> {
+  const cwd = await $.session.cwd()
+  const git = (...args: string[]) => $.process.run(['git', '-C', cwd, '--no-optional-locks', ...args], { timeoutMs: GIT_TIMEOUT_MS })
+    .catch(() => ({ exitCode: -1, stdout: '' }))
+  const [status, branchList, originHead, worktreeList] = await Promise.all([
+    git('status', '--porcelain=v2', '--branch'),
+    git('for-each-ref', '--format=%(refname:short)%09%(upstream:short)%09%(upstream:track)', 'refs/heads'),
+    git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD'),
+    git('worktree', 'list', '--porcelain'),
+  ])
+  const parsed = status.exitCode === 0 ? parseStatus(status.stdout) : undefined
+  if (!parsed) return undefined
+  const branches = branchList.exitCode === 0 ? parseBranches(branchList.stdout) : []
+  const defaultBranch = defaultBranchOf(originHead.exitCode === 0 ? originHead.stdout : '', branches.map(b => b.name))
+  const merged = defaultBranch
+    ? await git('for-each-ref', `--merged=${defaultBranch}`, '--format=%(refname:short)', 'refs/heads')
+    : undefined
+
+  return shipOf({
+    status: parsed,
+    branches,
+    merged: merged?.exitCode === 0 ? merged.stdout.split('\n').filter(Boolean) : [],
+    worktrees: worktreeList.exitCode === 0 ? parseWorktrees(worktreeList.stdout) : [],
+    defaultBranch,
+    ignore: globList(options.shipIgnore),
+  })
+}
+
+// Rereads the ship state into the pane and the status line; any failure shows nothing.
+async function refreshShip($: EngineInterface, options: Record<string, unknown>) {
+  const read = await readShip($, options).catch(() => undefined)
+  await update($, ship, () => read ?? null)
+  try {
+    $.ui.status(shipStatus(read))
+  } catch { /* no status line on this surface */ }
+}
+
 // The label of the Rex app that owns a block, from `session.view` and `client ls --json` output.
 export const ownerLabel = (view: string, clients: string, block: string) => {
   try {
@@ -110,7 +208,7 @@ export const ownerLabel = (view: string, clients: string, block: string) => {
   }
 }
 
-type Place = { kind: 'local' } | { kind: 'remote'; session: string; block: string; label: string }
+type Place = { kind: 'local' } | { kind: 'remote'; session: string; block: string; label: string; machine: string }
 
 // In Rex, a click belongs to the app that owns Claude's pane: this Mac opens the editor, another
 // machine gets a viewer split. Asked on every click, since the person can walk between machines.
@@ -130,7 +228,7 @@ async function placeOf($: EngineInterface): Promise<Place> {
   const label = ownerLabel(view.stdout, clients.stdout, block)
   const machine = here.stdout.trim()
 
-  return !label || !machine || label === machine ? { kind: 'local' } : { kind: 'remote', session, block, label }
+  return !label || !machine || label === machine ? { kind: 'local' } : { kind: 'remote', session, block, label, machine }
 }
 
 // Opens the file in a split right of Claude's pane, replacing the last viewer split if it is still open.
@@ -154,6 +252,13 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'outputs', description: 'Show files written this session (click to open in your editor)' })
     void openPane($).catch(() => undefined)
+    void refreshShip($, options).catch(() => undefined)
+    // While the pane is open, reread git now and then: another terminal may commit or push.
+    $.clock.every(SHIP_POLL_MS, () => {
+      void (async () => {
+        if ((await $.ui.panes()).some(pane => pane.id === PANE)) await refreshShip($, options)
+      })().catch(() => undefined)
+    })
 
     return next(e)
   })
@@ -169,6 +274,7 @@ export const register: Register = (on, options) => {
     if (ran.deny === undefined && ran.isError !== true) {
       await update($, files, list => remember(list, e.file_path, 'new', Date.now()))
       void openPane($).catch(() => undefined)
+      void refreshShip($, options).catch(() => undefined)
     }
 
     return ran
@@ -178,7 +284,23 @@ export const register: Register = (on, options) => {
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError !== true) {
       await update($, files, list => remember(list, e.file_path, 'edit', Date.now()))
+      void refreshShip($, options).catch(() => undefined)
     }
+
+    return ran
+  })
+
+  // Files a Bash call made reach the pane after it returns: the call is never held up or refused. Only a
+  // file landing in misc pops the pane, as built things (decks, videos) are what the person wants to see.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const startedAt = await $.clock.now().catch(() => undefined)
+    const ran = await next(e)
+    if (ran.deny === undefined && ran.isError !== true && startedAt !== undefined) {
+      void listBashFiles($, e.command, startedAt, options)
+        .then(isMisc => isMisc ? openPane($) : undefined)
+        .catch(() => undefined)
+    }
+    if (/\bgit\b/.test(e.command)) void refreshShip($, options).catch(() => undefined)
 
     return ran
   })
@@ -194,11 +316,31 @@ export const register: Register = (on, options) => {
     const shut = await read($, folded)
     const typed = await read($, query)
     const scratch = scratchPatterns(options.scratch)
+    const repo = await read($, ship)
+    const isShipOpen = await read($, shipOpen)
+    const platform = await platformOf($)
 
     const editor = editorArgv(options.editor, '')[0]?.split('/').pop() ?? DEFAULT_EDITOR
+    const opener = miscArgv(options.miscOpener, '', platform)[0]?.split('/').pop() ?? 'open'
+    const hasMisc = list.some(file => fileKind(file.path) === 'misc')
+    const toggleShip = () => void update($, shipOpen, now => !now)
 
     const open = async (path: string) => {
       const place = await placeOf($)
+      const isMisc = fileKind(path) === 'misc'
+      if (place.kind === 'remote' && isMisc) {
+        $.ui.toast(`${splitPath(path).name} opens only on the machine Claude runs on (${place.machine})`)
+
+        return
+      }
+      if (isMisc) {
+        const argv = miscArgv(options.miscOpener, path, platform)
+        const program = argv[0]?.split('/').pop() ?? ''
+        const { exitCode, stderr } = await $.process.run(argv).catch((error: unknown) => ({ exitCode: -1, stderr: String(error) }))
+        $.ui.toast(exitCode === 0 ? `${program} ← ${shorten(path, cwd, home)}` : `${program} failed: ${stderr.slice(0, 80)}`)
+
+        return
+      }
       if (place.kind === 'remote') {
         const argv = viewerArgv(options, path)
         const program = argv[0]?.split('/').pop() ?? ''
@@ -233,17 +375,17 @@ export const register: Register = (on, options) => {
     const isFiltering = typed.trim() !== ''
     const hits = hitsFor(typed)
     const created = list.filter(file => file.kind === 'new').length
-    // Scratch shows only once something lands in it; a filter hides the sections it empties.
+    // Misc and scratch show only once something lands in them; a filter hides the sections it empties.
     const drawn = SECTIONS.filter(section => {
       const count = hits.filter(file => sectionOf(file.path, scratch) === section.id).length
 
-      return count > 0 || (!isFiltering && section.id !== 'scratch')
+      return count > 0 || (!isFiltering && section.id !== 'scratch' && section.id !== 'misc')
     })
 
     return (
       <Box flexDirection="column" paddingX={1}>
         <Box flexDirection="column">
-          <Box flexDirection="row" justifyContent="space-between" alignItems="center" marginBottom={1}>
+          <Box flexDirection="row" justifyContent="space-between" alignItems="center" marginBottom={repo ? 0 : 1}>
             <Text bold color={ACCENT}>{''}  outputs</Text>
             <Box flexDirection="row" flexShrink={0}>
               {list.length > 0 && isFiltering && <Text dimColor>{`${hits.length} of ${list.length}`}</Text>}
@@ -256,6 +398,31 @@ export const register: Register = (on, options) => {
               )}
             </Box>
           </Box>
+
+          {repo && (
+            <Box flexDirection="column" marginBottom={1}>
+              <Box flexDirection="row" key="ship-row" hover={{ backgroundColor: HOVER_BG }}>
+                <Text color={isShipped(repo) ? NEW : EDIT}>{'\ue0a0'} </Text>
+                <Button plain key="ship" label={shipLine(repo)} hover={{ color: ACCENT, bold: true }} onPress={toggleShip} />
+              </Box>
+              {isShipOpen && repo.unpushed.length > 0 && <Text dimColor>  unpushed branches</Text>}
+              {isShipOpen && repo.unpushed.map(branch => (
+                <Box flexDirection="row" key={`unpushed:${branch.name}`}>
+                  <Text>    </Text>
+                  <Text color={EDIT}>{branch.name}</Text>
+                  <Text dimColor> {branch.why === 'ahead' ? `↑${branch.ahead}` : branch.why === 'gone' ? 'upstream gone' : 'no upstream'}</Text>
+                </Box>
+              ))}
+              {isShipOpen && repo.merged.length > 0 && <Text dimColor>  merged worktrees</Text>}
+              {isShipOpen && repo.merged.map(worktree => (
+                <Box flexDirection="row" key={`merged:${worktree.path}`}>
+                  <Text>    </Text>
+                  <Text color={NEW}>{worktree.branch}</Text>
+                  <Text dimColor wrap="truncate-start"> {shorten(worktree.path, cwd, home)}</Text>
+                </Box>
+              ))}
+            </Box>
+          )}
 
           {list.length > 0 && Input && (
             <Box marginBottom={1}>
@@ -313,7 +480,7 @@ export const register: Register = (on, options) => {
 
         {list.length > 0 && (
           <Box marginTop={1}>
-            <Text dimColor wrap="truncate-end">{''} click a name for {editor}</Text>
+            <Text dimColor wrap="truncate-end">{''} click a name for {editor}{hasMisc ? ` · misc in ${opener}` : ''}</Text>
           </Box>
         )}
       </Box>

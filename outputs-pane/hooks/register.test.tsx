@@ -69,8 +69,8 @@ describe('scratchPatterns', () => {
   test('a comma-separated list of globs; * and ? are wildcards, the rest is literal', () => {
     const scratch = scratchPatterns('msg-*, v?.log')
     expect(sectionOf('/w/v1.log', scratch)).toBe('scratch')
-    expect(sectionOf('/w/v12.log', scratch)).toBe('code')
-    expect(sectionOf('/w/v1xlog', scratch)).toBe('code')
+    expect(sectionOf('/w/v12.log', scratch)).toBe('misc')
+    expect(sectionOf('/w/v1xlog', scratch)).toBe('misc')
   })
 
   test('blank means no scratch; unset means the default msg-*', () => {
@@ -93,7 +93,7 @@ describe('pane', () => {
     const ran: string[][] = []
     on('tool.call', () => ({ result: 'ok' } as never))
     on('session.cwd', () => ({ value: '/Users/me/p' }))
-    on('process.run', (_$, e) => { ran.push([...e.argv]); return { value: { exitCode: 0, stdout: '', stderr: '' } } as never })
+    on('process.run', (_$, e) => { if (e.argv[0] !== 'git') ran.push([...e.argv]); return { value: { exitCode: 0, stdout: '', stderr: '' } } as never })
     on('ui.toast', () => ({ value: undefined }))
 
     await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/p/docs/plan.md', content: '# hi' })
@@ -150,7 +150,7 @@ describe('pane', () => {
     on('tool.call', () => ({ result: 'ok' } as never))
     on('session.cwd', () => ({ value: '/Users/me/p' }))
     on('ui.open', () => ({ value: { isPlaced: true } } as never))
-    on('process.run', (_$, e) => { ran.push([...e.argv]); return { value: { exitCode: 0, stdout: '', stderr: '' } } as never })
+    on('process.run', (_$, e) => { if (e.argv[0] !== 'git') ran.push([...e.argv]); return { value: { exitCode: 0, stdout: '', stderr: '' } } as never })
     on('ui.toast', () => ({ value: undefined }))
 
     await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/p/x.rs', content: 'x' })
@@ -225,7 +225,7 @@ describe('pane', () => {
     on('session.cwd', () => ({ value: '/Users/me/p' }))
     on('ui.open', () => ({ value: { isPlaced: true } } as never))
     on('ui.scroll', () => ({ value: {} } as never))
-    on('process.run', (_$, e) => { ran.push([...e.argv]); return { value: { exitCode: 0, stdout: '', stderr: '' } } as never })
+    on('process.run', (_$, e) => { if (e.argv[0] !== 'git') ran.push([...e.argv]); return { value: { exitCode: 0, stdout: '', stderr: '' } } as never })
     on('ui.toast', () => ({ value: undefined }))
 
     await $.tool.call({ tool: 'Write', tool_use_id: 't1', file_path: '/Users/me/p/docs/plan.md', content: '# p' })
@@ -283,7 +283,8 @@ const rexPane = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], 
   on('env.get', (_$, e) => ({ value: env[e.name] }) as never)
   on('process.run', (_$, e) => {
     const argv = [...e.argv]
-    ran.push(argv)
+    // Writes now refresh the ship state; these tests watch clicks, not git reads.
+    if (argv[0] !== 'git') ran.push(argv)
     const answer = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '' } } as never)
     if (argv[0] === 'scutil') return answer(`${rex.machine ?? 'Here'}\n`)
     if (argv[0] !== 'rex') return answer('')
