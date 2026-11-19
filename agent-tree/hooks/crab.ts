@@ -123,7 +123,8 @@ export const moodWord = (mood: Mood): string =>
 export const moodOf = (nodes: TreeNode[], batch: BatchCounts | null): Mood => {
   if (batch && batch.total > 0 && batch.fixed === batch.total) return 'party'
   const live = nodes.filter(n => n.status !== 'gone')
-  if (live.some(n => n.status === 'blocked')) return 'blocked'
+  // A turn that died on an API error waits on someone, as a blocked agent does.
+  if (live.some(n => n.status === 'blocked' || n.apiError)) return 'blocked'
   const working = live.filter(n => n.status === 'working')
   if (working.length && working.every(n => n.role === 'reviewer')) return 'review'
   return working.length ? 'typing' : 'asleep'

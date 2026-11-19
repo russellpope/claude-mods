@@ -1,11 +1,13 @@
-import type { Ding, HerdrAgent, InProcRun, Panel, Snapshot, TreeNode } from '../types'
+import type { Ding, HerdrAgent, InProcRun, Pace, Panel, Snapshot, TreeNode } from '../types'
 import { CRAB_ROWS, CRAB_WIDTH, MINI, ROLE_COLOR, halfBlock, moodOf, moodWord, spriteFor } from './crab'
 import { KEEP_ACKED } from './dings'
+import { batchText } from './pace'
 import { costumeOfRole, crabSvg, heroSvg } from './svg-crab'
 import { partition } from './tree'
 import { fmtCost, fmtTime, modelName } from './usage'
 import {
   STATUS_COLOR,
+  ERROR_GLYPH,
   STATUS_GLYPH,
   ageText,
   clip,
@@ -14,10 +16,11 @@ import {
   countsLine,
   ctxPercent,
   dots,
+  errorNote,
   groupAll,
   isCompact,
   meterColor,
-  modelLabel,
+  modelCell,
   needText,
   padName,
   rowColumns,
@@ -25,11 +28,12 @@ import {
   tokenLine,
   totals,
   treePrefix,
+  wasText,
 } from './view'
 
-export type PaneModel = { snap: Snapshot; panel: Panel; frame: number; inproc: InProcRun[]; dings: Ding[]; cols: number; surface: string }
-/** `ack` with no pane acks every open ding. */
-export type PaneActions = { focus: (pane: string) => void; ack: (pane?: string) => void; setPanel: (fn: (p: Panel) => Panel) => void }
+export type PaneModel = { snap: Snapshot; panel: Panel; frame: number; inproc: InProcRun[]; dings: Ding[]; pace: Pace | null; cols: number; surface: string }
+/** `ack` with no pane acks every open ding. `cont` sends an errored agent the continue prompt. */
+export type PaneActions = { focus: (pane: string) => void; ack: (pane?: string) => void; setPanel: (fn: (p: Panel) => Panel) => void; cont: (pane: string) => void }
 
 // `ui` is `$.ui.resolve(e)` for a Pane render; typed loosely so the terminal and desktop tables both fit.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -52,7 +56,8 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   const mood = moodOf(snap.nodes, snap.batch)
   const shown = [...tree, ...(panel.isFinishedOpen ? finished : [])]
   const cols = rowColumns(shown, NAME_MAX)
-  const hasUsage = shown.some(n => n.usage)
+  // A transcript read before any model answered (a first turn that died on an API error) has no numbers to show.
+  const hasUsage = shown.some(n => n.usage?.model)
   const marked = new Set(m.dings.filter(d => d.isOpen).map(d => d.pane))
   // Fixed column widths line the rows up on the terminal; other surfaces lay them out themselves.
   const fixed = (width: number) => (m.surface === 'terminal' ? { width, flexShrink: 0 } : {})
@@ -105,7 +110,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         {dots(batchPct, 12).filled ? <Text color="#3B9C5F">{dots(batchPct, 12).filled}</Text> : null}
         {dots(batchPct, 12).empty ? <Text dimColor>{dots(batchPct, 12).empty}</Text> : null}
       </Box>
-      <Text dimColor>{`${snap.batch.fixed}/${snap.batch.total} fixed · ${snap.batch.inProgress} in progress`}</Text>
+      <Text dimColor>{batchText(snap.batch, m.pace)}</Text>
     </Box>
   ) : null
 
@@ -125,7 +130,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   )
 
   const meter = (n: TreeNode) => {
-    if (!n.usage) return null
+    if (!n.usage?.model) return null
     const pct = ctxPercent(n.usage)
     const d = dots(pct, METER_DOTS)
     return (
@@ -139,23 +144,36 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
     )
   }
 
+  // An errored row shows the warning mark in place of its status glyph.
+  const glyph = (n: TreeNode) => (n.apiError ? ERROR_GLYPH : STATUS_GLYPH[n.status])
+  const glyphColor = (n: TreeNode) => (n.apiError ? MARK_COLOR : STATUS_COLOR[n.status])
+  const continueButton = (n: TreeNode) => (n.apiError ? <Button key={`c-${n.pane}-${n.startedAt}`} label="continue" plain onPress={() => act.cont(n.pane)} /> : null)
+
   const nodeRow = (n: TreeNode) => {
     if (compact)
       return (
         <Box key={`${n.pane}-${n.startedAt}`} flexDirection="row" gap={1}>
-          <Text color={STATUS_COLOR[n.status]}>{STATUS_GLYPH[n.status]}</Text>
+          <Text color={glyphColor(n)}>{glyph(n)}</Text>
           {marked.has(n.pane) ? <Text color={MARK_COLOR}>!</Text> : null}
-          {nameButton(n, m.cols - 8, NAME_MIN)}
-          {n.usage ? <Text color={meterColor(ctxPercent(n.usage))}>{`${ctxPercent(n.usage)}%`}</Text> : null}
+          {nameButton(n, m.cols - (n.apiError ? 17 : 8), NAME_MIN)}
+          {n.usage?.model ? <Text color={meterColor(ctxPercent(n.usage))}>{`${ctxPercent(n.usage)}%`}</Text> : null}
+          {continueButton(n)}
         </Box>
       )
     const prefix = treePrefix(n)
-    const note = [n.ticket, n.status === 'blocked' || n.status === 'done' ? n.title : ''].filter(Boolean).join(' ')
+    const note = [
+      n.ticket,
+      n.apiError ? errorNote(n.apiError) : '',
+      n.usage?.model && n.usage.was ? wasText(n.usage.was) : '',
+      n.status === 'blocked' || n.status === 'done' ? n.title : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
     return (
       <Box key={`${n.pane}-${n.startedAt}`} flexDirection="row" gap={1}>
         <Box key="name" flexDirection="row" {...fixed(nameCol + 5)}>
           {prefix ? <Text dimColor>{prefix}</Text> : null}
-          <Text color={STATUS_COLOR[n.status]}>{`${STATUS_GLYPH[n.status]} `}</Text>
+          <Text color={glyphColor(n)}>{`${glyph(n)} `}</Text>
           {Svg ? (
             <Svg key={`cr-${n.pane}`} source={crabSvg(costumeOfRole(n.role), n.status === 'working')} alt={n.role} width={34} height={32} />
           ) : (
@@ -175,7 +193,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         ) : null}
         {hasUsage ? (
           <Box key="model" {...fixed(cols.model)}>
-            <Text dimColor>{modelLabel(n.usage)}</Text>
+            <Text dimColor>{modelCell(n.usage)}</Text>
           </Box>
         ) : null}
         {hasUsage ? (
@@ -191,6 +209,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         <Box key="time" {...fixed(TIME_WIDTH)}>
           <Text dimColor>{spanText(n)}</Text>
         </Box>
+        {continueButton(n)}
         {note ? (
           <Text key="note" dimColor wrap="truncate-end">
             {note}

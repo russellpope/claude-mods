@@ -1,19 +1,22 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Ding, Edge, HerdrAgent, InProcRun, Panel, Snapshot } from '../types'
+import type { Ding, Edge, HerdrAgent, InProcRun, Pace, Panel, Snapshot } from '../types'
 import { ackAll, addDings, findDings, markSeen, nameDings, needYou, parentsOf, settleDings } from './dings'
 import { herdrError, invokesAgentStart, mayStartHerdr, newAgents, parseAgentList, parseStarted, parseTabList } from './herdr'
 import { WEEK_MS, edgeAt, edgeFileName, ledgerDir, makeEdge, parseEdge } from './ledger'
-import { CODEX_THREAD_ARGV, LIST_ARGV, focusArgvs, invokesRexSpawn, keepNames, namesHarness, parseClaudeSessionFile, parseRexList, parseRexStarted, pidOf } from './rex'
+import { CODEX_THREAD_ARGV, LIST_ARGV, focusArgvs, invokesRexSpawn, keepNames, namesHarness, parseClaudeSessionFile, parseRexList, parseRexStarted, pidOf, promptArgvs } from './rex'
 import type { RexList } from './rex'
 import type { TreeNode, Usage } from '../types'
 import { addRollout, codexUsage } from './codex'
 import { completeRun, spawnRun, stepRun } from './inproc'
 import { drawPane } from './pane'
+import { observeBatch } from './pace'
+import { teamStatusText } from './status'
+import type { StatusScope } from './status'
 import { TICKET_GREP_ARGV, batchCounts, batchStamp, parseTicketGrep, repoFromCommonDir, ticketFor } from './tickets'
 import type { Ticket } from './tickets'
-import { buildTree, roleOf } from './tree'
+import { buildTree, markErrors, roleOf } from './tree'
 import { CHUNK_BYTES, addTranscript, consumeChunk, emptyUsage, toUsage, transcriptPath } from './usage'
 import type { UsageAcc } from './usage'
 import { statusLine } from './view'
@@ -37,6 +40,23 @@ export const frame = atom({ plugin: 'agent-tree', key: 'frame' } as const, 0)
 export const inproc = atom({ plugin: 'agent-tree', key: 'inproc' } as const, [] as InProcRun[])
 export const edgeCount = atom({ plugin: 'agent-tree', key: 'edgeCount' } as const, 0)
 export const dings = atom({ plugin: 'agent-tree', key: 'dings' } as const, [] as Ding[])
+// Session state, so a reload keeps the batch's observed closes.
+export const pace = atom({ plugin: 'agent-tree', key: 'pace' } as const, null as Pace | null)
+
+export const TEAM_STATUS = 'team_status'
+export const TEAM_STATUS_TOOL = 'mcp__agent-tree__team_status'
+export const DEFAULT_CONTINUE = 'Continue your dispatch from where you stopped.'
+// team_status answers from a snapshot no older than this; an older one is refreshed first.
+const FRESH_MS = 2000
+
+export const TEAM_STATUS_DESCRIPTION = [
+  'The state of the workers this session spawned in herdr or Rex panes, and the agents those spawned: one line each, in tree order, with name, role, status, ticket, model and effort, context percent, time in the tree, a DONE: or BLOCKED: title and the pane id.',
+  'An errored row is a worker whose turn ended on an API error; a model change says what the model was.',
+  'The first line has the counts, the dings that need you, and the batch with its fixed count and ETA.',
+  'Call this for worker state in place of reading panes (herdr pane read, rex output) or sleeping and polling.',
+  'It reports the state now and does not wait for anything to change: to see a change, call it again later. It never sends anything to a pane.',
+  "scope: 'tree' (default) for this session's tree; 'all' for every listed agent, grouped by repo.",
+].join(' ')
 
 // Module caches: a reload starts them over, which only costs a re-read.
 // Only edges that parsed: a sibling session's file caught mid-write is read again next time.
@@ -228,9 +248,16 @@ async function withUsage($: EngineInterface, home: string, nodes: TreeNode[]): P
       c.offset += read.bytes
       c.isSkipping = read.isSkipping
     }
-    out.push({ ...n, usage: c.acc.model ? reader.usage(c.acc) : n.usage })
+    // A first turn that died on an API error has no model yet, and still shows as errored.
+    out.push({ ...n, usage: c.acc.model || c.acc.apiError ? reader.usage(c.acc) : withoutError(n.usage) })
   }
   return out
+}
+
+const withoutError = (u: Usage | null): Usage | null => {
+  if (!u?.apiError) return u
+  const { apiError: _gone, ...rest } = u
+  return rest
 }
 
 async function reposFor($: EngineInterface, cwds: string[]): Promise<Record<string, string>> {
@@ -281,6 +308,8 @@ const rexPlaceholder = (pane: string, name: string): HerdrAgent => ({
 
 // One refresh at a time: two would read the same transcript bytes and advance the offset twice.
 let running: Promise<void> | null = null
+// When the last full refresh (usage and tickets read) finished its snapshot.
+let fullAt = -Infinity
 
 // A press always answers: the multiplexer jumps to the pane, or a toast says why it could not.
 async function focusPane($: EngineInterface, pane: string): Promise<boolean> {
@@ -380,9 +409,51 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
     nodes = await withUsage($, home, nodes)
     repos = await reposFor($, [...nodes.map(n => n.cwd), ...agents.map(a => a.cwd)])
     ;({ nodes, batch } = await withTickets($, nodes, repos, at))
+    const seen = batch
+    const before = await read($, pace)
+    if (observeBatch(before, seen, at) !== before) await update($, pace, p => observeBatch(p, seen, at))
   }
+  nodes = markErrors(nodes)
   await update($, snapshot, () => ({ at, root, nodes, all: agents, repos, batch, error: '' }))
+  if (full) fullAt = at
   $.ui.status(statusLine(nodes, needYou(log)))
+}
+
+/** The snapshot, refreshed first when the last full refresh is older than FRESH_MS. It never waits for a change. */
+async function freshSnapshot($: EngineInterface): Promise<Snapshot> {
+  // A refresh already running may be a light one (no usage): then one more, full.
+  for (let i = 0; i < 2 && (await $.clock.now()) - fullAt >= FRESH_MS; i++) await refresh($, true)
+  return read($, snapshot)
+}
+
+async function teamStatus($: EngineInterface, scope: StatusScope): Promise<string> {
+  const snap = await freshSnapshot($)
+  return teamStatusText({ snap, dings: await read($, dings), pace: await read($, pace), scope })
+}
+
+/**
+ * Sends one prompt to an errored agent, by its own multiplexer, after a fresh look at its status: an agent
+ * working by then gets nothing. Every press ends in a toast: sent, or why not.
+ */
+async function continueAgent($: EngineInterface, pane: string, text: string): Promise<void> {
+  const say = (msg: string) => $.ui.toast(`agent-tree: ${msg}`)
+  const mux = await muxOf($)
+  const agents = mux ? await listAgents($, mux) : null
+  const known = (await read($, snapshot)).nodes.find(n => n.pane === pane)
+  const name = known?.name || pane
+  if (!agents) return say(`did not send continue to ${name}: ${mux ? `${muxName(mux)} is not answering` : 'not in a herdr or Rex pane'}`)
+  const target = agents.find(a => a.pane === pane && (!known?.mux || a.mux === known.mux))
+  if (!target) return say(`did not send continue to ${name}: it is no longer listed`)
+  if (target.status === 'working') return say(`did not send continue to ${name}: it is working`)
+  const argvs = promptArgvs(target, text)
+  if (!argvs.length) return say(`did not send continue to ${name}: its Rex session is not known`)
+  for (const argv of argvs) {
+    const r = await $.process.run(argv, { timeoutMs: 5000 }).catch((err: unknown) => String(err))
+    if (typeof r !== 'string' && r.exitCode === 0) continue
+    const reason = typeof r === 'string' ? r : (argv[0] === 'herdr' ? herdrError(r.stdout) : '') || r.stderr.trim() || `exit ${r.exitCode}`
+    return say(`could not send continue to ${name}: ${reason}`)
+  }
+  say(`sent continue to ${name}`)
 }
 
 // True from the moment this session opens the pane until ui.panes says it is gone: a session
@@ -463,6 +534,18 @@ export const register: Register = (on, options) => {
     // A reload keeps an open pane but starts the module's flag over: look once.
     mayBeOpen = true
     await isPaneOpen($).catch(() => false)
+    // A lead's view of its workers, without reading panes. Only where there is a tree to report.
+    if (await muxOf($)) {
+      await $.tool.register({
+        name: TEAM_STATUS,
+        description: TEAM_STATUS_DESCRIPTION,
+        isDeferred: false,
+        inputSchema: {
+          type: 'object',
+          properties: { scope: { type: 'string', enum: ['tree', 'all'], description: "tree (default): this session's tree; all: every listed agent, grouped by repo" } },
+        },
+      }).catch(() => undefined)
+    }
     let tick = 0
     $.clock.every(2000, () => {
       void (async () => {
@@ -482,6 +565,17 @@ export const register: Register = (on, options) => {
     return started
   })
 
+  on('tool.call', { tool: TEAM_STATUS_TOOL }, async ($, e) => {
+    const scope = e.scope === 'all' ? 'all' : 'tree'
+    try {
+      return { result: await teamStatus($, scope) }
+    } catch (err) {
+      return { deny: `agent-tree: ${err instanceof Error ? err.message : String(err)}` }
+    }
+  })
+
+  const continuePrompt = typeof options.continuePrompt === 'string' && options.continuePrompt.trim() ? options.continuePrompt : DEFAULT_CONTINUE
+
   on('command.run', { command: 'agent-tree' }, async $ => {
     const isOpen = await togglePane($)
     return { text: isOpen ? 'Agent tree opened.' : 'Agent tree closed.' }
@@ -497,6 +591,7 @@ export const register: Register = (on, options) => {
         frame: await read($, frame),
         inproc: await read($, inproc),
         dings: await read($, dings),
+        pace: await read($, pace),
         cols: e.props.bodyColumns || 80,
         surface: e.surface,
       },
@@ -504,6 +599,7 @@ export const register: Register = (on, options) => {
         focus: pane => void focusRow($, pane),
         ack: pane => void ackDings($, pane),
         setPanel: fn => void update($, panel, fn),
+        cont: pane => void continueAgent($, pane, continuePrompt).catch(() => undefined),
       },
     )
   })

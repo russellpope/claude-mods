@@ -1,5 +1,5 @@
 import type { Usage } from '../types'
-import { toUsage } from './usage'
+import { changeOf, toUsage } from './usage'
 import type { UsageAcc } from './usage'
 
 type Counts = { cached_input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number; total_tokens?: number }
@@ -9,6 +9,7 @@ type Counts = { cached_input_tokens?: number; output_tokens?: number; reasoning_
 const BASELINE_TOKENS = 12_000
 
 type Line = {
+  timestamp?: string
   type?: string
   payload?: {
     type?: string
@@ -34,6 +35,8 @@ export const addRollout = (acc: UsageAcc, text: string): UsageAcc => {
     }
     const p = o.payload
     if (o.type === 'turn_context' && p?.model) {
+      const change = changeOf(next, p.model, p.effort ?? '', Date.parse(o.timestamp ?? '') || 0)
+      if (change) next.was = change
       next.model = p.model
       next.effort = p.effort ?? ''
     }

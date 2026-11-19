@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { HerdrAgent, TreeNode, Usage } from '../types'
-import { ageText, clip, costLine, costText, countsLine, ctxPercent, dots, groupAll, isCompact, meterColor, modelLabel, padName, rowColumns, spanText, statusLine, tokenLine, totals, treePrefix } from './view'
+import { ageText, clip, costLine, costText, countsLine, ctxPercent, dots, errorNote, groupAll, isCompact, meterColor, modelCell, modelLabel, padName, rowColumns, spanText, statusLine, tokenLine, totals, treePrefix, wasText } from './view'
 
 const node = (over: Partial<TreeNode>): TreeNode => ({
   pane: 'p', parent: 'R', depth: 0, isLast: false, name: 'n', harness: 'claude', role: 'other', status: 'working',
@@ -157,5 +157,31 @@ describe('row text', () => {
     expect(cols).toEqual({ name: 10, harness: 8, model: 13, cost: 6 })
     expect(rowColumns([node({ name: 'x'.repeat(80) })], 30).name).toBe(30)
     expect(rowColumns([], 30)).toEqual({ name: 0, harness: 0, model: 0, cost: 0 })
+  })
+})
+
+describe('errored rows and model changes', () => {
+  const err = { reason: 'server_error', status: 529, at: 0 }
+
+  test('the note gives the reason and, when there is one, the status code', () => {
+    expect(errorNote(err)).toBe('API error: server_error (529)')
+    expect(errorNote({ reason: 'authentication_failed', status: null, at: 0 })).toBe('API error: authentication_failed')
+  })
+
+  test('the status line counts errored rows after the blocked count, and not again as blocked', () => {
+    expect(statusLine([node({ status: 'working' }), node({ status: 'blocked' }), node({ status: 'idle', apiError: err }), node({ status: 'blocked', apiError: err })], 1)).toBe('tree 1● 1! 2⚠ · 1 needs you')
+    expect(statusLine([node({ status: 'idle', apiError: err })])).toBe('tree 0● 1⚠')
+  })
+
+  test('the counts give errored rows their own part', () => {
+    expect(countsLine([node({ status: 'working' }), node({ status: 'idle' }), node({ status: 'idle', apiError: err })])).toBe('1 working · 1 idle · 1 errored')
+  })
+
+  test("the model cell marks a change; the note says what it was", () => {
+    const was = { model: 'claude-opus-5-5', effort: 'high', at: 0 }
+    expect(modelCell(use({ model: 'claude-sonnet-5-5', effort: 'high', was }))).toBe('Sonnet 5.5·high*')
+    expect(modelCell(use({ model: 'claude-sonnet-5-5', effort: 'high' }))).toBe('Sonnet 5.5·high')
+    expect(wasText(was)).toBe('was Opus 5.5·high')
+    expect(wasText({ ...was, effort: '' })).toBe('was Opus 5.5')
   })
 })

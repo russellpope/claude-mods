@@ -1,7 +1,7 @@
 {
   "name": "agent-tree",
-  "version": "0.1.0",
-  "description": "Pane of the herdr agents this session spawned, and theirs: status, model, context, cost, ticket. /agent-tree toggles it; a global view lists every herdr agent.",
+  "version": "0.2.0",
+  "description": "Pane of the herdr and Rex agents this session spawned, and theirs: status, model, context, cost, ticket, batch ETA. /agent-tree toggles it; a global view lists every agent; leads get a team_status tool.",
   "author": { "name": "Russell Pope", "url": "https://github.com/russellpope" },
   "homepage": "https://github.com/russellpope/claude-mods/tree/main/agent-tree",
   "repository": "https://github.com/russellpope/claude-mods",
@@ -14,6 +14,12 @@
       "description": "off keeps the crab still",
       "default": "on",
       "options": ["on", "off"]
+    },
+    "continuePrompt": {
+      "type": "string",
+      "title": "Continue prompt",
+      "description": "What an errored row's continue button sends to that agent",
+      "default": "Continue your dispatch from where you stopped."
     }
   }
 }

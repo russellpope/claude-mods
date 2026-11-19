@@ -142,3 +142,14 @@ export const partition = (nodes: TreeNode[]): { tree: TreeNode[]; finished: Tree
   nodes.forEach((n, i) => (isLive(n.status) || liveBelow(i) ? tree : finished).push(n))
   return { tree, finished }
 }
+
+/**
+ * Errored: the transcript's newest main-chain line is an API error and the multiplexer does not report the
+ * agent working. A gone pane has no agent to continue, so it is never errored.
+ */
+export const markErrors = (nodes: TreeNode[]): TreeNode[] =>
+  nodes.map(n => {
+    const e = n.usage?.apiError
+    const { apiError: _old, ...rest } = n
+    return e && n.status !== 'working' && n.status !== 'gone' ? { ...rest, apiError: e } : rest
+  })

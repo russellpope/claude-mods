@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { focusArgvs, invokesRexSpawn, keepNames, namesHarness, parseClaudeSessionFile, parseRexList, parseRexStarted, pidOf } from './rex'
+import type { HerdrAgent } from '../types'
+import { focusArgvs, invokesRexSpawn, keepNames, namesHarness, parseClaudeSessionFile, parseRexList, parseRexStarted, pidOf, promptArgvs } from './rex'
 
 const pane = (block: string, extra: Record<string, unknown> = {}) => ({
   session: 'session:s1',
@@ -198,5 +199,25 @@ describe('focusArgvs', () => {
       ['rex', '-S', 'linux-box', 'api'],
       ['rex', '-S', 'linux-box', 'do'],
     ])
+  })
+})
+
+describe('promptArgvs', () => {
+  const target = (over: Partial<HerdrAgent>): HerdrAgent => ({ pane: 'block:b1', name: 'w', harness: 'claude', status: 'idle', title: '', label: '', cwd: '/w', workspace: 'session:s1', session: '', terminal: 'block:b1', ...over })
+
+  test("a Rex block: the text into the block in its session, then Enter; another host's through -S", () => {
+    expect(promptArgvs(target({ mux: 'rex' }), 'Go on.')).toEqual([
+      ['rex', 'send', '-s', 'session:s1', '-b', 'block:b1', 'Go on.'],
+      ['rex', 'send-key', '-s', 'session:s1', '-b', 'block:b1', 'enter'],
+    ])
+    expect(promptArgvs(target({ mux: 'rex', server: 'mini' }), 'Go on.')[0]).toEqual(['rex', '-S', 'mini', 'send', '-s', 'session:s1', '-b', 'block:b1', 'Go on.'])
+  })
+
+  test('a herdr pane: one agent prompt, which submits it', () => {
+    expect(promptArgvs(target({ mux: 'herdr', pane: 'w1:p2' }), 'Go on.')).toEqual([['herdr', 'agent', 'prompt', 'w1:p2', 'Go on.']])
+  })
+
+  test('a Rex block with no session known: nothing to run', () => {
+    expect(promptArgvs(target({ mux: 'rex', workspace: '' }), 'Go on.')).toEqual([])
   })
 })
