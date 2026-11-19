@@ -62,13 +62,17 @@ for (const [exts, icon] of FAMILIES) for (const ext of exts) BY_EXT[ext] ??= ico
 // open with the misc opener, and only these pop the pane when a Bash call makes one. A file that is misc by
 // elimination (an extensionless binary or script, an unknown extension) opens in the editor, so a click never runs
 // a program.
+// Misc, with an archive's icon, but never handed to the opener and never popping the pane.
+const NEVER_OPENED = new Set(['dmg', 'pkg'])
+
 export const MISC_FAMILIES: Record<string, string[]> = {
   office: [...(FAMILIES[0]?.[0] ?? []), ...(FAMILIES[1]?.[0] ?? []), ...(FAMILIES[2]?.[0] ?? []), 'csv'],
   pdf: ['pdf'],
   images: [...(FAMILIES[3]?.[0] ?? []), 'png', 'jpg', 'svg'],
   video: FAMILIES[4]?.[0] ?? [],
   audio: FAMILIES[5]?.[0] ?? [],
-  archives: FAMILIES[6]?.[0] ?? [],
+  // Archives, but never disk images or installer packages: opening one mounts it or starts the Installer.
+  archives: (FAMILIES[6]?.[0] ?? []).filter(ext => !NEVER_OPENED.has(ext)),
   fonts: FAMILIES[7]?.[0] ?? [],
 }
 const MISC_EXTS = new Set(Object.values(MISC_FAMILIES).flat())

@@ -470,6 +470,24 @@ describe('fix round 1', () => {
     ])
   })
 
+  test('C1: a disk image or installer package stays in misc but opens in the editor, never the opener', async ($, on) => {
+    const w = world(on)
+    expect([fileKind('/w/App.dmg'), fileKind('/w/Setup.pkg')]).toEqual(['misc', 'misc'])
+    await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: `${CWD}/App.dmg`, content: 'x' })
+    await $.tool.call({ tool: 'Write', tool_use_id: 'w2', file_path: `${CWD}/Setup.pkg`, content: 'x' })
+    const ui = await mount($)
+    await ui.press({ key: `open:${CWD}/App.dmg` })
+    await ui.press({ key: `open:${CWD}/Setup.pkg` })
+    expect(w.clicked()).toEqual([['zed', `${CWD}/App.dmg`], ['zed', `${CWD}/Setup.pkg`]])
+  })
+
+  test('C1: a Bash-made disk image or package is listed without popping the pane', async ($, on) => {
+    const w = world(on, { found: [`${CWD}/dist2/App.dmg`, `${CWD}/Setup.pkg`] })
+    await bash($, 'hdiutil create App.dmg', () => w.clock.settle())
+    expect(w.files()).toHaveLength(2)
+    expect(w.opened).toEqual([])
+  })
+
   test('C1: in Rex from another machine an extensionless misc file opens in the viewer split, not a toast', async ($, on) => {
     const w = world(on, { rexFar: true })
     await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: `${CWD}/bin/deploy`, content: 'x' })

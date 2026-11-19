@@ -130,7 +130,9 @@ The **known misc families** are the extensions below. Only these open with `misc
 - **Images:** `jpeg gif webp heic ico bmp tif tiff avif png jpg svg`
 - **Video:** `mp4 mov mkv webm avi m4v`
 - **Audio:** `mp3 wav flac m4a ogg aac aiff`
-- **Archives:** `zip tar gz tgz bz2 xz zst 7z rar dmg pkg`
+- **Archives:** `zip tar gz tgz bz2 xz zst 7z rar`
+
+Disk images (`.dmg`) and installer packages (`.pkg`) are misc, with an archive's icon, but aren't in a family: opening one would mount it or start the Installer, so a click opens them in your editor and a `Bash` call that makes one doesn't pop the pane.
 - **Fonts:** `ttf otf woff woff2`
 
 ## Ship state
