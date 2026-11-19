@@ -3,9 +3,9 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { OutputFile, Section, Ship } from '../types'
 import { globList, globWords } from './globs'
-import { iconFor, isCode } from './icons'
-import { birthArgv, findArgv, isSkipped, kindOf, namedPaths, parseBirths, SCAN_CAP, SCAN_TIMEOUT_MS, stampOf } from './scan'
-import { defaultBranchOf, isShipped, parseBranches, parseStatus, parseWorktrees, shipLine, shipOf, shipStatus } from './ship'
+import { iconFor, isCode, isMiscFamily } from './icons'
+import { birthArgv, findArgv, isJunk, isSkipped, kindOf, listedPaths, namedPaths, parseBirths, SCAN_CAP, SCAN_TIMEOUT_MS, stampOf } from './scan'
+import { defaultBranchOf, isFresh, isShipped, parseBranches, parseStatus, parseWorktrees, shipLine, shipOf, shipStatus } from './ship'
 
 const PANE = 'outputs'
 const TITLE = 'Outputs'
@@ -112,8 +112,8 @@ export const miscArgv = (setting: unknown, path: string, platform: string | unde
 const platformOf = async ($: EngineInterface) => (await $.session.info().catch(() => undefined))?.platform
 
 // After a Bash call: one find for files under the working directory modified since the call began, plus the
-// absolute and ~ paths its command names. A failed or slow listing lists nothing. Returns whether a file
-// landed in misc.
+// absolute and ~ paths its command names. A failed or slow listing lists nothing. Returns whether a file of a
+// known misc family landed in misc, which pops the pane.
 async function listBashFiles($: EngineInterface, command: string, startedAt: number, options: Record<string, unknown>) {
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME').catch(() => undefined)) ?? cwd.match(/^\/(Users|home)\/[^/]+/)?.[0] ?? ''
@@ -123,13 +123,15 @@ async function listBashFiles($: EngineInterface, command: string, startedAt: num
 
   const listing = await $.process.run(findArgv(cwd, stamp, globWords(options.ignore)), { env: { TZ: 'UTC' }, timeoutMs: SCAN_TIMEOUT_MS })
     .catch(() => undefined)
-  if (!listing || listing.exitCode !== 0 || listing.isStdoutTruncated) return false
-  const found = listing.stdout.split('\n').filter(line => line.startsWith('/') && !isSkipped(line, ignore))
+  const listed = listedPaths(listing)
+  if (!listed) return false
+  const found = listed.filter(path => !isSkipped(path, cwd, ignore) && !isJunk(path))
   const scanned = found.length > SCAN_CAP ? [] : found
 
+  // Named paths skip nothing but junk: the skip list and ignore are about the working directory's tree.
   const named: string[] = []
   for (const path of namedPaths(command, home)) {
-    if (scanned.includes(path) || isSkipped(path, ignore)) continue
+    if (scanned.includes(path) || isJunk(path)) continue
     const stat = await $.fs.stat(path).catch(() => undefined)
     if (stat?.kind === 'file' && stat.mtimeMs >= stampMs) named.push(path)
   }
@@ -145,7 +147,32 @@ async function listBashFiles($: EngineInterface, command: string, startedAt: num
     remember(next, path, kindOf(births.get(path), stampMs, next.find(one => one.path === path)?.kind), at), list))
   const scratch = scratchPatterns(options.scratch)
 
-  return paths.some(path => sectionOf(path, scratch) === 'misc')
+  return paths.some(path => sectionOf(path, scratch) === 'misc' && isMiscFamily(path))
+}
+
+// One listing at a time per session. Calls that end while one runs share the next: it starts from the earliest
+// of their start times and reads all their commands, so it covers each of them.
+const scans: { isRunning: boolean; next?: { command: string; startedAt: number } } = { isRunning: false }
+
+function queueScan($: EngineInterface, command: string, startedAt: number, options: Record<string, unknown>) {
+  const waiting = scans.next
+  scans.next = waiting
+    ? { command: `${waiting.command}\n${command}`, startedAt: Math.min(waiting.startedAt, startedAt) }
+    : { command, startedAt }
+  if (!scans.isRunning) void drainScans($, options)
+}
+
+async function drainScans($: EngineInterface, options: Record<string, unknown>) {
+  scans.isRunning = true
+  try {
+    for (let job = scans.next; job; job = scans.next) {
+      scans.next = undefined
+      const isMisc = await listBashFiles($, job.command, job.startedAt, options).catch(() => false)
+      if (isMisc) await openPane($).catch(() => undefined)
+    }
+  } finally {
+    scans.isRunning = false
+  }
 }
 
 // Local git reads only, each with a short timeout and optional locks off, so nothing is written: never a
@@ -154,33 +181,46 @@ async function readShip($: EngineInterface, options: Record<string, unknown>): P
   const cwd = await $.session.cwd()
   const git = (...args: string[]) => $.process.run(['git', '-C', cwd, '--no-optional-locks', ...args], { timeoutMs: GIT_TIMEOUT_MS })
     .catch(() => ({ exitCode: -1, stdout: '' }))
-  const [status, branchList, originHead, worktreeList] = await Promise.all([
+  const [status, branchList, originHead, initDefault, worktreeList] = await Promise.all([
     git('status', '--porcelain=v2', '--branch'),
     git('for-each-ref', '--format=%(refname:short)%09%(upstream:short)%09%(upstream:track)', 'refs/heads'),
     git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD'),
+    git('config', '--get', 'init.defaultBranch'),
     git('worktree', 'list', '--porcelain'),
   ])
   const parsed = status.exitCode === 0 ? parseStatus(status.stdout) : undefined
   if (!parsed) return undefined
   const branches = branchList.exitCode === 0 ? parseBranches(branchList.stdout) : []
-  const defaultBranch = defaultBranchOf(originHead.exitCode === 0 ? originHead.stdout : '', branches.map(b => b.name))
-  const merged = defaultBranch
-    ? await git('for-each-ref', `--merged=${defaultBranch}`, '--format=%(refname:short)', 'refs/heads')
+  const base = defaultBranchOf(originHead.exitCode === 0 ? originHead.stdout : '', initDefault.exitCode === 0 ? initDefault.stdout : '',
+    branches.map(b => b.name))
+  const mergedRead = base
+    ? await git('for-each-ref', `--merged=${base.ref}`, '--format=%(refname:short)', 'refs/heads')
     : undefined
+  const merged = mergedRead?.exitCode === 0 ? mergedRead.stdout.split('\n').filter(Boolean) : []
+  const worktrees = worktreeList.exitCode === 0 ? parseWorktrees(worktreeList.stdout) : []
+  // A merged worktree's branch must have been committed to: its reflog says so. No reflog, no verdict.
+  const candidates = worktrees.slice(1).flatMap(w => w.branch && w.branch !== base?.name && merged.includes(w.branch) ? [w.branch] : [])
+  const reflogs = await Promise.all(candidates.map(branch => git('reflog', 'show', '--format=%gs', `refs/heads/${branch}`, '--')))
 
   return shipOf({
     status: parsed,
     branches,
-    merged: merged?.exitCode === 0 ? merged.stdout.split('\n').filter(Boolean) : [],
-    worktrees: worktreeList.exitCode === 0 ? parseWorktrees(worktreeList.stdout) : [],
-    defaultBranch,
+    merged,
+    worktrees,
+    defaultBranch: base?.name,
+    fresh: candidates.filter((_, i) => reflogs[i]?.exitCode === 0 && isFresh(reflogs[i]?.stdout ?? '')),
     ignore: globList(options.shipIgnore),
   })
 }
 
+// Each refresh's number: only the latest one started may land, so a slow read never overwrites a newer one.
+let shipReads = 0
+
 // Rereads the ship state into the pane and the status line; any failure shows nothing.
 async function refreshShip($: EngineInterface, options: Record<string, unknown>) {
+  const mine = ++shipReads
   const read = await readShip($, options).catch(() => undefined)
+  if (mine !== shipReads) return
   await update($, ship, () => read ?? null)
   try {
     $.ui.status(shipStatus(read))
@@ -296,9 +336,7 @@ export const register: Register = (on, options) => {
     const startedAt = await $.clock.now().catch(() => undefined)
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError !== true && startedAt !== undefined) {
-      void listBashFiles($, e.command, startedAt, options)
-        .then(isMisc => isMisc ? openPane($) : undefined)
-        .catch(() => undefined)
+      queueScan($, e.command, startedAt, options)
     }
     if (/\bgit\b/.test(e.command)) void refreshShip($, options).catch(() => undefined)
 
@@ -322,12 +360,14 @@ export const register: Register = (on, options) => {
 
     const editor = editorArgv(options.editor, '')[0]?.split('/').pop() ?? DEFAULT_EDITOR
     const opener = miscArgv(options.miscOpener, '', platform)[0]?.split('/').pop() ?? 'open'
-    const hasMisc = list.some(file => fileKind(file.path) === 'misc')
+    const hasMisc = list.some(file => fileKind(file.path) === 'misc' && isMiscFamily(file.path))
     const toggleShip = () => void update($, shipOpen, now => !now)
 
     const open = async (path: string) => {
       const place = await placeOf($)
-      const isMisc = fileKind(path) === 'misc'
+      // Only a known misc family (office, PDF, media, archives, fonts) goes to the opener: anything misc by
+      // elimination, such as an extensionless executable, opens as code does, so a click never runs a program.
+      const isMisc = fileKind(path) === 'misc' && isMiscFamily(path)
       if (place.kind === 'remote' && isMisc) {
         $.ui.toast(`${splitPath(path).name} opens only on the machine Claude runs on (${place.machine})`)
 

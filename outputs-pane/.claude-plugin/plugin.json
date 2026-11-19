@@ -38,13 +38,13 @@
     "miscOpener": {
       "type": "string",
       "title": "Misc opener",
-      "description": "Command that opens a clicked misc file (decks, PDFs, images, video); the path is added as the last argument (e.g. qlmanage -p); blank for open on macOS, xdg-open on Linux",
+      "description": "Command that opens a clicked file of a known misc family (decks, PDFs, images, media, archives, fonts); the path is added as the last argument (e.g. qlmanage -p); blank for open on macOS, xdg-open on Linux",
       "default": ""
     },
     "ignore": {
       "type": "string",
       "title": "Ignored folders",
-      "description": "Folders skipped when listing files a Bash call made, on top of .git, node_modules, target, dist, build and the like: comma-separated globs (e.g. vendor, out*); blank for none",
+      "description": "Folders below the working directory skipped when listing files a Bash call made, on top of dot folders, node_modules, target, dist, build, out and coverage: comma-separated globs of folder names (e.g. vendor, gen*); blank for none",
       "default": ""
     },
     "shipIgnore": {

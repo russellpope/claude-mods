@@ -60,12 +60,24 @@ export const parseWorktrees = (text: string): Worktree[] =>
     return path ? [{ path, branch }] : []
   })
 
-// `git symbolic-ref --short refs/remotes/origin/HEAD` names it (`origin/main`); else main, else master.
-export const defaultBranchOf = (originHead: string, local: readonly string[]) => {
-  const named = originHead.trim().replace(/^[^/]+\//, '')
-  if (named && local.includes(named)) return named
+// The default branch: what `git symbolic-ref --short refs/remotes/origin/HEAD` names (`origin/main`), else
+// `git config --get init.defaultBranch` when a local branch has that name, else main, else master. `ref` is what
+// merges are judged against: the local branch, or origin's when there is no local copy.
+export const defaultBranchOf = (originHead: string, initDefault: string, local: readonly string[]) => {
+  const remote = originHead.trim()
+  const named = remote.replace(/^[^/]+\//, '')
+  if (named) return { name: named, ref: local.includes(named) ? named : remote }
+  const name = [initDefault.trim(), 'main', 'master'].find(one => one && local.includes(one))
 
-  return ['main', 'master'].find(name => local.includes(name))
+  return name ? { name, ref: name } : undefined
+}
+
+// `git reflog show --format=%gs refs/heads/<branch>`, newest first: a branch whose only entry is its creation was
+// never committed to, so being merged by ancestry says nothing about it.
+export const isFresh = (reflog: string) => {
+  const entries = reflog.split('\n').filter(Boolean)
+
+  return entries.length === 1 && entries[0]!.startsWith('branch: Created')
 }
 
 export type ShipInput = {
@@ -75,14 +87,17 @@ export type ShipInput = {
   merged: readonly string[]
   worktrees: Worktree[]
   defaultBranch: string | undefined
+  // Branches whose reflog holds only their creation: not merged worktrees, whatever ancestry says.
+  fresh: readonly string[]
   // shipIgnore: branches left out of both counts.
   ignore: readonly RegExp[]
 }
 
 // Unpushed: ahead of its upstream, or with none (or a gone one) and not merged into the default branch, whose
-// commits exist nowhere else. Merged worktrees: every worktree but the main checkout whose branch is merged.
-export const shipOf = ({ status, branches, merged, worktrees, defaultBranch, ignore }: ShipInput): Ship => {
-  const isKept = (name: string) => !ignore.some(pattern => pattern.test(name))
+// commits exist nowhere else. The current branch is left out when the line shows its ahead count already.
+// Merged worktrees: every worktree but the main checkout whose branch is merged and was committed to.
+export const shipOf = ({ status, branches, merged, worktrees, defaultBranch, fresh, ignore }: ShipInput): Ship => {
+  const isKept = (name: string) => !ignore.some(pattern => pattern.test(name)) && !(name === status.head && status.ahead > 0)
   const isMerged = (name: string) => defaultBranch !== undefined && merged.includes(name)
 
   return {
@@ -97,7 +112,8 @@ export const shipOf = ({ status, branches, merged, worktrees, defaultBranch, ign
         : (!b.upstream || b.isGone) && !isMerged(b.name) ? [{ name: b.name, ahead: 0, why: b.isGone ? 'gone' : 'none' }]
           : []),
     merged: worktrees.slice(1).flatMap(w =>
-      w.branch && w.branch !== defaultBranch && isMerged(w.branch) && isKept(w.branch) ? [{ branch: w.branch, path: w.path }] : []),
+      w.branch && w.branch !== defaultBranch && isMerged(w.branch) && !fresh.includes(w.branch) && !ignore.some(p => p.test(w.branch!))
+        ? [{ branch: w.branch, path: w.path }] : []),
   }
 }
 

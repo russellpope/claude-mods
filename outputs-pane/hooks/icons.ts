@@ -58,6 +58,30 @@ const FAMILIES: [string[], Icon][] = [
 ]
 for (const [exts, icon] of FAMILIES) for (const ext of exts) BY_EXT[ext] ??= icon
 
+// The known misc families, by extension: office files, PDFs, images, video, audio, archives and fonts. Only these
+// open with the misc opener, and only these pop the pane when a Bash call makes one. A file that is misc by
+// elimination (an extensionless binary or script, an unknown extension) opens in the editor, so a click never runs
+// a program.
+export const MISC_FAMILIES: Record<string, string[]> = {
+  office: [...(FAMILIES[0]?.[0] ?? []), ...(FAMILIES[1]?.[0] ?? []), ...(FAMILIES[2]?.[0] ?? []), 'csv'],
+  pdf: ['pdf'],
+  images: [...(FAMILIES[3]?.[0] ?? []), 'png', 'jpg', 'svg'],
+  video: FAMILIES[4]?.[0] ?? [],
+  audio: FAMILIES[5]?.[0] ?? [],
+  archives: FAMILIES[6]?.[0] ?? [],
+  fonts: FAMILIES[7]?.[0] ?? [],
+}
+const MISC_EXTS = new Set(Object.values(MISC_FAMILIES).flat())
+
+const extOf = (path: string) => {
+  const name = (path.split('/').pop() ?? path).toLowerCase()
+  const dot = name.lastIndexOf('.')
+
+  return dot > 0 ? name.slice(dot + 1) : ''
+}
+
+export const isMiscFamily = (path: string) => MISC_EXTS.has(extOf(path))
+
 // Code: source, config and markup extensions. Everything not code or planning goes to misc.
 const CODE_EXTS = new Set([
   'rs', 'ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'py', 'pyi', 'go', 'rb', 'java', 'kt', 'kts', 'scala',
@@ -68,22 +92,29 @@ const CODE_EXTS = new Set([
   'lock', 'tf', 'hcl', 'nix', 'gradle', 'cmake', 'mk', 'kdl', 'proto', 'graphql', 'gql', 'sql', 'prisma',
   'html', 'htm', 'xml', 'xsl', 'css', 'scss', 'sass', 'less', 'tex', 'rst', 'adoc', 'org',
   'diff', 'patch', 'ipynb', 'd',
+  'mod', 'sum', 'work', 'bzl', 'bazel', 'erb', 'ejs', 'hbs', 'njk', 'jinja', 'j2', 'tmpl', 'vim', 'el', 'lisp',
+  'groovy', 'csproj', 'fsproj', 'sln', 'cabal', 'map',
 ])
 // Code files with no extension, by name.
 const CODE_NAMES = new Set([
   'makefile', 'gnumakefile', 'dockerfile', 'containerfile', 'justfile', 'rakefile', 'gemfile', 'procfile',
   'vagrantfile', 'brewfile', 'podfile', 'jenkinsfile', 'caddyfile', 'license', 'licence', 'copying', 'readme',
-  'codeowners', 'owners', 'notice', 'authors',
+  'codeowners', 'owners', 'notice', 'authors', 'build', 'workspace', 'pipfile', 'tiltfile', 'earthfile', 'snakefile',
+  'meson',
 ])
 
-// A known source, config or markup extension, a known extensionless name, or a dotfile.
+// A known source, config or markup extension, a known extensionless name, or a dotfile. A name whose part before
+// the first dot is a known name is code too (Dockerfile.dev, Makefile.am, meson.build), unless its extension is a
+// known misc family (build.zip, license.pdf).
 export const isCode = (path: string) => {
   const name = (path.split('/').pop() ?? path).toLowerCase()
   if (CODE_NAMES.has(name) || name.startsWith('.')) return true
   const dot = name.lastIndexOf('.')
-  if (dot <= 0) return CODE_NAMES.has(name.replace(/[-_.].*$/, ''))
+  if (dot <= 0) return CODE_NAMES.has(name.replace(/[-_].*$/, ''))
+  if (CODE_EXTS.has(name.slice(dot + 1))) return true
+  if (MISC_EXTS.has(name.slice(dot + 1))) return false
 
-  return CODE_EXTS.has(name.slice(dot + 1))
+  return CODE_NAMES.has(name.slice(0, name.indexOf('.')))
 }
 
 export const iconFor = (path: string): Icon => {

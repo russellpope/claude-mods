@@ -1,8 +1,9 @@
 // Files a Bash call made: pure helpers for the one listing after the call, and for paths its command names.
 import type { OutputFile } from '../types'
 
-// Folders never listed: version control, dependencies, build output, tool caches.
-export const SKIP_DIRS = ['.git', 'node_modules', 'target', 'dist', 'build', '.venv', '__pycache__', '.codegraph']
+// Folders below the working directory never listed: every dot folder (.git, .venv, .pytest_cache, .next and the
+// like), dependencies, build output and tool caches.
+export const SKIP_DIRS = ['node_modules', 'target', 'dist', 'build', 'out', 'coverage', '__pycache__']
 // More changed files than this in one call is a build: the listing adds none of them.
 export const SCAN_CAP = 50
 // The listing's budget; a slower one lists nothing.
@@ -17,18 +18,41 @@ export const stampOf = (ms: number) => new Date((Math.floor(ms / 1000) - 1) * 10
 // find's -iname takes [ as a class; the settings' globs take it literally.
 const findGlob = (glob: string) => glob.replace(/\[/g, '\\[')
 
-// One find: prune the skipped folders and the ignore globs by name, then print every regular file modified
-// after the stamp. Only POSIX find primaries plus -newermt and -iname, which BSD and GNU find both have.
+// One find: below the working directory (-mindepth 1, so the directory itself is never judged), prune folders
+// that are dot folders, skipped or match an ignore glob, then print every regular file modified after the stamp.
+// -type d keeps a file whose own name matches. POSIX primaries plus -mindepth, -newermt and -iname, which BSD
+// and GNU find both have.
 export const findArgv = (cwd: string, stamp: string, ignore: readonly string[]) => [
-  'find', cwd,
-  '(', ...SKIP_DIRS.flatMap((name, i) => [...(i ? ['-o'] : []), '-name', name]),
+  'find', cwd, '-mindepth', '1',
+  '-type', 'd', '(', '-name', '.*', ...SKIP_DIRS.flatMap(name => ['-o', '-name', name]),
   ...ignore.flatMap(glob => ['-o', '-iname', findGlob(glob)]), ')', '-prune',
   '-o', '-type', 'f', '-newermt', stamp, '-print',
 ]
 
-// A path inside a skipped folder or one matching an ignore glob; the file's own name is not checked.
-export const isSkipped = (path: string, ignore: readonly RegExp[]) =>
-  path.split('/').slice(0, -1).some(part => SKIP_DIRS.includes(part) || ignore.some(pattern => pattern.test(part)))
+// A path below the working directory inside a dot folder, a skipped folder or one matching an ignore glob, the
+// same rule as the listing's: only the folders between the working directory and the file count.
+export const isSkipped = (path: string, cwd: string, ignore: readonly RegExp[]) =>
+  path.startsWith(`${cwd}/`) && path.slice(cwd.length + 1).split('/').slice(0, -1)
+    .some(part => part.startsWith('.') || SKIP_DIRS.includes(part) || ignore.some(pattern => pattern.test(part)))
+
+// Never listed: Finder's .DS_Store and editor swap and backup files (.x.swp, .x.swo, x~, .#x).
+export const isJunk = (path: string) => {
+  const name = path.split('/').pop() ?? path
+
+  return name === '.DS_Store' || /^\..*\.sw[op]$/.test(name) || name.endsWith('~') || name.startsWith('.#')
+}
+
+// The listing's paths, or undefined for a failed listing. find exits 1 when a folder can't be read or a file
+// vanished mid-walk while still printing the rest: those errors alone keep the output, any other loses it.
+export const listedPaths = (ran: { exitCode: number; stdout: string; stderr: string; isStdoutTruncated?: boolean } | undefined) => {
+  if (!ran || ran.isStdoutTruncated) return undefined
+  const errors = ran.stderr.split('\n').filter(Boolean)
+  const isPartial = ran.exitCode === 1 && errors.length > 0 &&
+    errors.every(line => /: (Permission denied|No such file or directory)$/.test(line))
+  if (ran.exitCode !== 0 && !isPartial) return undefined
+
+  return ran.stdout.split('\n').filter(line => line.startsWith('/'))
+}
 
 // Absolute and ~ paths in the command text: quoted ones whole, bare ones up to a space or shell operator.
 // Relative paths are left to the listing of the working directory.

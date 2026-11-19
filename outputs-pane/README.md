@@ -23,15 +23,15 @@ A side pane in Claude Code that lists every file Claude writes or edits in the s
 
 - **Tracks** every successful `Write` (green `+`, new file) and `Edit` (yellow `~`, changed file). Newest first, one row per file. A file Claude created stays marked new after later edits. Failed or denied writes are left out.
 - **Files made by shell commands:** after each successful `Bash` call, the pane lists files created (`+`) or changed (`~`) during the call, so a deck a script built, a video from `ffmpeg` or a file copied out of the scratchpad shows up too. See [Files made by Bash](#files-made-by-bash).
-- **Pops open** on every successful `Write`, and when a `Bash` call makes a misc file, so a closed pane comes back when there's something new. Edits and other files made by `Bash` are listed without reopening it.
+- **Pops open** on every successful `Write`, and when a `Bash` call makes a file of a [known misc family](#what-counts-as-code) (a deck, a PDF, a video), so a closed pane comes back when there's something new. Edits and other files made by `Bash` are listed without reopening it.
 - **Sections:** planning, code, misc, scratch, in that order, one rule for every file however it was made. A file whose name matches a scratch pattern goes under scratch, whatever its extension. Otherwise `.md`, `.mdx`, `.markdown` and `.txt` go under planning; code files (listed [below](#what-counts-as-code)) under code; and everything else under misc: office files, PDFs, images, audio, video, archives, fonts, binaries and data dumps. Misc and scratch only appear once something lands in them; misc starts unfolded and scratch folded. Click a section header to fold or unfold it.
 - **Ship state:** a line under the title, when the working directory is in a git repository. See [Ship state](#ship-state).
 - **Scroll:** every file is listed. Scroll the pane with the mouse wheel, or with the arrow keys once it has focus.
 - **Filter:** type in the field at the top to list only paths containing that text, ignoring case. It matches the path as shown, so `i343`, `gate-logs` and `sdd/` all work. The header shows how many files match, sections with no match are hidden, and Enter opens the first match.
 - **Icons:** Nerd Font file-type icons with colors in the style of [eza](https://github.com/eza-community/eza) `--icons`.
 - **Hover:** the row under the pointer is highlighted and the file name is underlined.
-- **Open:** clicking a file name runs your editor command with the file's path. A misc file runs your `miscOpener` command instead, by default `open` on macOS and `xdg-open` on Linux, so a deck opens in Keynote or PowerPoint and a video in your player. The choice goes by the file's kind, so a misc file in scratch opens the same way. A toast confirms it or shows the error.
-- **Rex on another machine:** when Claude runs in [Rex](#rex) and you click from a Rex app on a different machine, the file opens in a viewer split to the right of Claude instead, so it shows up where you are. Markdown and text files open in `glow`, other code files in `bat`. Press `q` to close it. Clicking another file replaces the split. A terminal viewer can't show a misc file, so clicking one only shows a toast with its name, saying it opens only on the machine Claude runs on.
+- **Open:** clicking a file name runs your editor command with the file's path. A file of a [known misc family](#what-counts-as-code) runs your `miscOpener` command instead, by default `open` on macOS and `xdg-open` on Linux, so a deck opens in Keynote or PowerPoint and a video in your player. Any other misc file, such as an extensionless binary or script or an unknown extension, opens in your editor, so a click never runs a program. The choice goes by the file's name, so a misc file in scratch opens the same way. A toast confirms it or shows the error.
+- **Rex on another machine:** when Claude runs in [Rex](#rex) and you click from a Rex app on a different machine, the file opens in a viewer split to the right of Claude instead, so it shows up where you are. Markdown and text files open in `glow`, other code files in `bat`. Press `q` to close it. Clicking another file replaces the split. A terminal viewer can't show a file of a known misc family, so clicking one only shows a toast with its name, saying it opens only on the machine Claude runs on. Other misc files open in `bat`.
 - **`/outputs`** opens the pane by hand.
 
 The list lives in the session's state, so it survives the mod reloading but starts empty in each new session.
@@ -70,7 +70,7 @@ Start a new `claude` session. The pane opens at session start when the terminal 
 | `markdownViewer` | `glow -p` | In Rex on another machine, the command that shows a clicked planning file in a split. The path is added as the last argument. |
 | `codeViewer` | `bat --paging=always` | The same for every other file, for example `nvim -R`. Markdown and text files use `markdownViewer`, even in scratch. |
 | `miscOpener` | blank | Command that opens a clicked misc file, with the path added as the last argument, for example `qlmanage -p` for Quick Look. Blank runs `open` on macOS and `xdg-open` on Linux. |
-| `ignore` | blank | Folders the listing after a `Bash` call skips, on top of the built-in ones: names as comma-separated globs, the same syntax as `scratch` (`vendor, out*`). A matching folder is skipped wherever it sits. |
+| `ignore` | blank | Folders below the working directory that the listing after a `Bash` call skips, on top of the built-in ones: folder names as comma-separated globs, the same syntax as `scratch` (`vendor, gen*`). It matches folders only, so a file named `generated.pdf` is still listed, and it never applies to the working directory's own path or to paths a command names. |
 | `shipIgnore` | blank | Branches the ship line leaves out: comma-separated globs (`vendor-*, spike-*`). A matching branch drops out of the unpushed count, and its worktree out of the merged count. For branches you keep local on purpose. |
 
 Change it from Claude Code's config menu, or in `~/.claude/settings.json`:
@@ -100,26 +100,38 @@ Change it from Claude Code's config menu, or in `~/.claude/settings.json`:
 
 When a `Bash` call starts, the pane notes the time. It lets the call run, never holding it up or refusing it, and once the call has returned it looks for files modified since then:
 
-- under the session's working directory, with one `find` command (`TZ=UTC find <cwd> ( -name .git -o -name node_modules … ) -prune -o -type f -newermt '<YYYY-MM-DD HH:MM:SS>' -print`). It skips `.git`, `node_modules`, `target`, `dist`, `build`, `.venv`, `__pycache__`, `.codegraph` and any folder matching the `ignore` setting;
-- plus every absolute or `~` path the command names, if it is a file modified since the call began. That covers the scratchpad and other places outside the working directory, as in `cp deck.pptx ~/Desktop/deck.pptx`.
+- under the session's working directory, with one `find` command (`TZ=UTC find <cwd> -mindepth 1 -type d ( -name '.*' -o -name node_modules … ) -prune -o -type f -newermt '<YYYY-MM-DD HH:MM:SS>' -print`). Below the working directory it skips every dot folder (`.git`, `.venv`, `.pytest_cache`, `.next` and the like), `node_modules`, `target`, `dist`, `build`, `out`, `coverage`, `__pycache__` and any folder matching the `ignore` setting. Only folders between the working directory and the file count, so a project inside a folder named `build` is listed as usual;
+- plus every absolute or `~` path the command names, if it is a file modified since the call began. That covers the scratchpad and other places outside the working directory, as in `cp deck.pptx ~/Desktop/deck.pptx`. The skip list and `ignore` don't apply to these.
+
+`.DS_Store` and editor swap and backup files (`.*.swp`, `.*.swo`, `*~`, `.#*`) are never listed.
 
 `find` was chosen because it is on every macOS and Linux machine, and that spelling of `-newermt` is the one both BSD find (macOS) and GNU find read the same way. A file born during the call is new (`+`); one that already existed is changed (`~`). Birth times come from `stat -f %B` on macOS and `stat -c %W` on Linux. Where the file system keeps no birth time, a file the pane doesn't list yet counts as new.
 
-The listing is bounded. It gets 2 seconds; a slower one lists nothing. If more than 50 files changed in one call, it's treated as a build and none of them are listed, though paths the command names still are. A failed `Bash` call, a failed listing and a timeout list nothing and show no error. A file the pane already lists isn't listed twice: it moves to the top and keeps its mark.
+The listing is bounded. One runs at a time; calls that end while one runs share the next, which covers all of them. It gets 2 seconds; a slower one lists nothing. If more than 50 files changed in one call, it's treated as a build and none of them are listed, though paths the command names still are. A failed `Bash` call, a failed listing and a timeout list nothing and show no error. `find` exiting 1 only because a folder couldn't be read or a file vanished mid-walk still counts: what it printed is listed. A file the pane already lists isn't listed twice: it moves to the top and keeps its mark.
 
 ## What counts as code
 
-A file is code when its name is a known extensionless one or a dotfile, or when its extension is in this list:
+A file is code when its name is a known one or a dotfile, or when its extension is in this list:
 
-- **Source:** `rs ts tsx mts cts js jsx mjs cjs py pyi go rb java kt kts scala swift m mm c h cc cpp cxx hpp hh cs fs php pl pm lua r jl dart ex exs erl hs ml mli clj cljs elm nim zig vue svelte astro d`
+- **Source:** `rs ts tsx mts cts js jsx mjs cjs py pyi go rb java kt kts scala swift m mm c h cc cpp cxx hpp hh cs fs php pl pm lua r jl dart ex exs erl hs ml mli clj cljs elm nim zig vue svelte astro d el lisp vim groovy`
 - **Shell:** `sh bash zsh fish ps1 bat cmd nu awk sed`
-- **Config:** `json jsonc json5 jsonl toml yaml yml ini cfg conf properties env plist lock tf hcl nix gradle cmake mk kdl proto graphql gql sql prisma`
-- **Markup:** `html htm xml xsl css scss sass less tex rst adoc org`
+- **Config and build:** `json jsonc json5 jsonl toml yaml yml ini cfg conf properties env plist lock tf hcl nix gradle cmake mk kdl proto graphql gql sql prisma mod sum work bzl bazel csproj fsproj sln cabal map`
+- **Markup and templates:** `html htm xml xsl css scss sass less tex rst adoc org erb ejs hbs njk jinja j2 tmpl`
 - **Changes and notebooks:** `diff patch ipynb`
-- **Names:** `Makefile GNUmakefile Dockerfile Containerfile Justfile Rakefile Gemfile Procfile Vagrantfile Brewfile Podfile Jenkinsfile Caddyfile LICENSE LICENCE COPYING README CODEOWNERS OWNERS NOTICE AUTHORS`, matched ignoring case, also with a suffix after `-` or `_` (`README-old`). A name with a dot is judged by its extension, so `Dockerfile.dev` is misc
+- **Names:** `Makefile GNUmakefile Dockerfile Containerfile Justfile Rakefile Gemfile Procfile Vagrantfile Brewfile Podfile Jenkinsfile Caddyfile LICENSE LICENCE COPYING README CODEOWNERS OWNERS NOTICE AUTHORS BUILD WORKSPACE Pipfile Tiltfile Earthfile Snakefile meson`, matched ignoring case: alone, with a suffix after `-` or `_` (`README-old`), or before a first dot (`Dockerfile.dev`, `Makefile.am`, `meson.build`, `go.mod` by its extension), unless the extension is a known misc family (`build.zip` and `license.pdf` are misc)
 - **Dotfiles:** any name starting with `.` (`.env`, `.gitignore`, `.zshrc`)
 
 Everything else is misc. That includes `.svg`, `.csv` and `.log` (made to be looked at, not edited), and binaries with no extension.
+
+The **known misc families** are the extensions below. Only these open with `miscOpener`, and only these pop the pane when a `Bash` call makes one. Every other misc file opens in your editor.
+
+- **Office:** `pptx ppt key odp docx doc pages odt rtf xlsx xls numbers ods csv`
+- **PDF:** `pdf`
+- **Images:** `jpeg gif webp heic ico bmp tif tiff avif png jpg svg`
+- **Video:** `mp4 mov mkv webm avi m4v`
+- **Audio:** `mp3 wav flac m4a ogg aac aiff`
+- **Archives:** `zip tar gz tgz bz2 xz zst 7z rar dmg pkg`
+- **Fonts:** `ttf otf woff woff2`
 
 ## Ship state
 
@@ -131,14 +143,14 @@ When the working directory is in a git repository, a line under the pane's title
 
 - the current branch (or `detached HEAD`, or `main, no commits`), with commits ahead `↑` and behind `↓` its upstream;
 - **dirty:** files `git status` lists as changed, staged or untracked;
-- **unpushed:** local branches ahead of their upstream, or with no upstream (or a deleted one) and not merged into the default branch. A local branch already merged into the default branch has nothing that exists only there, so it doesn't count;
-- **merged worktrees:** worktrees, not counting the main checkout, whose branch is already merged into the default branch: ones you can probably remove.
+- **unpushed:** local branches ahead of their upstream, or with no upstream (or a deleted one) and not merged into the default branch. A local branch already merged into the default branch has nothing that exists only there, so it doesn't count. The current branch isn't counted when the line already shows its `↑`; with no upstream it is;
+- **merged worktrees:** worktrees, not counting the main checkout, whose branch is merged into the default branch and was committed to: ones you can probably remove. A branch whose reflog holds only its creation (`git reflog show refs/heads/<branch>`) is a fresh one, not a merged one. With no reflog to read, merged by ancestry counts.
 
 Counts of zero are left out. When nothing is unshipped the line reads, for example, `main · committed and pushed`. Click the line to list the unpushed branches and the merged worktrees with their paths; click it again to fold them.
 
 While something is unshipped, Claude Code's status line shows the same in short form. It clears when nothing is.
 
-The pane rereads git at session start, after a `Bash` call whose command names `git`, after a successful `Write` or `Edit`, and every 30 seconds while the pane is open. Each read is local: `git status`, `git for-each-ref`, `git symbolic-ref` and `git worktree list`, run with optional locks off, so even `status` doesn't write the index, and each gets 3 seconds. The pane never runs `git fetch` or anything else that touches the network or changes the repository, so **behind** counts only what the last fetch saw. The default branch is the one `origin/HEAD` names, else `main`, else `master`. Outside a git repository, or when git fails, there's no line and no error.
+The pane rereads git at session start, after a `Bash` call whose command names `git`, after a successful `Write` or `Edit`, and every 30 seconds while the pane is open. Each read is local: `git status`, `git for-each-ref`, `git symbolic-ref`, `git config --get`, `git worktree list` and `git reflog show`, run with optional locks off, so even `status` doesn't write the index, and each gets 3 seconds. The pane never runs `git fetch` or anything else that touches the network or changes the repository, so **behind** counts only what the last fetch saw. A refresh that answers after a newer one started is dropped. The default branch is the one `origin/HEAD` names, else `init.defaultBranch`, else `main`, else `master`; when `origin/HEAD` names a branch with no local copy, merges are judged against the remote's (`origin/<name>`). Outside a git repository, or when git fails, there's no line and no error.
 
 The pane only reports. It doesn't clean up branches or worktrees, and it doesn't commit or push.
 
@@ -155,8 +167,9 @@ If Rex can't say who owns the pane, the click opens your editor.
 - A `Bash` call's listing finds files under the working directory and paths the command names in full. A file a command writes to a relative folder outside the working directory (`cd /tmp && ./build`), or into a named folder rather than a named file (`cp a.pdf ~/Desktop/`), is missed.
 - On Linux, GNU find compares times more finely than BSD find, so a file changed up to a second before a `Bash` call can be listed with it.
 - A command that saves a file by writing a new copy and renaming it over the old one (`sed -i`, many formatters) gives it a new birth time, so that file is marked new rather than changed.
-- A worktree just created from the default branch, with no commits of its own yet, counts as merged until its first commit: git can't tell it from one that was merged.
-- Files are sorted into sections by name alone, so an extensionless script (`bin/deploy`) goes under misc, and clicking it runs `miscOpener`, not your editor.
+- A worktree whose branch reflog has expired (90 days by default) is judged by ancestry alone, so an old branch that was never committed to counts as merged.
+- Files are sorted into sections by name alone, so an extensionless script (`bin/deploy`) goes under misc. It opens in your editor.
+- A command that only reads a named file the moment another program writes it (`tail /tmp/server.log` on a running server) lists it.
 - Colors are fixed hex values tuned for dark themes.
 
 ## Development

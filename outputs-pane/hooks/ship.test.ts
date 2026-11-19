@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { globList } from './globs'
-import { defaultBranchOf, parseBranches, parseStatus, parseWorktrees, shipLine, shipOf, shipStatus } from './ship'
+import { defaultBranchOf, isFresh, parseBranches, parseStatus, parseWorktrees, shipLine, shipOf, shipStatus } from './ship'
 
 // Captured by hand from real repos (git 2.56.1): the claude-mods main checkout, and scratch repos with
 // a gone upstream, a detached worktree and no commits.
@@ -97,11 +97,27 @@ describe('parseWorktrees', () => {
 })
 
 describe('defaultBranchOf', () => {
-  test("origin's HEAD names it; else main, else master, among local branches", () => {
-    expect(defaultBranchOf('origin/trunk\n', ['main', 'trunk'])).toBe('trunk')
-    expect(defaultBranchOf('', ['master', 'x'])).toBe('master')
-    expect(defaultBranchOf('', ['main', 'master'])).toBe('main')
-    expect(defaultBranchOf('', ['x'])).toBeUndefined()
+  test("origin's HEAD names it, then init.defaultBranch, then main, then master", () => {
+    expect(defaultBranchOf('origin/trunk\n', 'develop\n', ['main', 'trunk', 'develop'])).toEqual({ name: 'trunk', ref: 'trunk' })
+    expect(defaultBranchOf('', 'develop\n', ['main', 'develop'])).toEqual({ name: 'develop', ref: 'develop' })
+    expect(defaultBranchOf('', 'develop\n', ['main'])).toEqual({ name: 'main', ref: 'main' })
+    expect(defaultBranchOf('', '', ['master', 'x'])).toEqual({ name: 'master', ref: 'master' })
+    expect(defaultBranchOf('', '', ['main', 'master'])).toEqual({ name: 'main', ref: 'main' })
+    expect(defaultBranchOf('', '', ['x'])).toBeUndefined()
+  })
+
+  test("with no local copy of origin's default, merges are judged against origin's", () => {
+    expect(defaultBranchOf('origin/trunk\n', '', ['feature'])).toEqual({ name: 'trunk', ref: 'origin/trunk' })
+    expect(defaultBranchOf('upstream/dev\n', '', [])).toEqual({ name: 'dev', ref: 'upstream/dev' })
+  })
+})
+
+describe('isFresh', () => {
+  test('a reflog holding only its creation entry is a fresh branch; more, or none, is not', () => {
+    expect(isFresh('branch: Created from main\n')).toBe(true)
+    expect(isFresh('commit: x\nbranch: Created from main\n')).toBe(false)
+    expect(isFresh('commit (initial): one\n')).toBe(false)
+    expect(isFresh('')).toBe(false)
   })
 })
 
@@ -111,6 +127,7 @@ const ship = (status: string, ignore = '') => shipOf({
   merged: ['main', 'master', 'merged-br', 'behind'],
   worktrees: parseWorktrees(WORKTREES),
   defaultBranch: 'main',
+  fresh: [],
   ignore: globList(ignore),
 })
 
@@ -119,9 +136,20 @@ describe('shipOf', () => {
     expect(ship(STATUS_MAIN).unpushed).toEqual([
       { name: 'gone', ahead: 0, why: 'gone' },
       { name: 'local-only', ahead: 0, why: 'none' },
-      { name: 'main', ahead: 1, why: 'ahead' },
       { name: 'both', ahead: 2, why: 'ahead' },
     ])
+  })
+
+  test('the current branch is left out when the line already shows its ahead count', () => {
+    expect(ship(STATUS_MAIN).unpushed.map(b => b.name)).not.toContain('main')
+    expect(ship(STATUS_GONE).unpushed.map(b => b.name)).toContain('gone')
+    const feature = shipOf({ status: parseStatus(STATUS_NO_UPSTREAM)!, branches: parseBranches('feature\t\t\nmain\torigin/main\t\n'), merged: ['main'], worktrees: [], defaultBranch: 'main', fresh: [], ignore: [] })
+    expect(feature.unpushed).toEqual([{ name: 'feature', ahead: 0, why: 'none' }])
+  })
+
+  test('a fresh branch, merged by ancestry but never committed to, is not a merged worktree', () => {
+    const fresh = shipOf({ status: parseStatus(STATUS_MAIN)!, branches: parseBranches(BRANCHES), merged: ['main', 'master', 'merged-br', 'behind'], worktrees: parseWorktrees(WORKTREES), defaultBranch: 'main', fresh: ['merged-br'], ignore: [] })
+    expect(fresh.merged).toEqual([])
   })
 
   test('merged worktrees: a branch merged into the default, the main checkout and detached ones left out', () => {
@@ -130,12 +158,12 @@ describe('shipOf', () => {
 
   test('shipIgnore drops branches from the unpushed count and their worktrees from the merged count', () => {
     const ignored = ship(STATUS_MAIN, 'local-*, merged-?r, gone')
-    expect(ignored.unpushed.map(b => b.name)).toEqual(['main', 'both'])
+    expect(ignored.unpushed.map(b => b.name)).toEqual(['both'])
     expect(ignored.merged).toEqual([])
   })
 
   test('without a default branch nothing counts as merged, so no-upstream branches count', () => {
-    const none = shipOf({ status: parseStatus(STATUS_MAIN)!, branches: parseBranches('a\t\t\n'), merged: [], worktrees: parseWorktrees(WORKTREES), defaultBranch: undefined, ignore: [] })
+    const none = shipOf({ status: parseStatus(STATUS_MAIN)!, branches: parseBranches('a\t\t\n'), merged: [], worktrees: parseWorktrees(WORKTREES), defaultBranch: undefined, fresh: [], ignore: [] })
     expect(none.unpushed.map(b => b.name)).toEqual(['a'])
     expect(none.merged).toEqual([])
   })
@@ -145,7 +173,7 @@ const clean = (over: Partial<ReturnType<typeof ship>> = {}) => ({ ...ship(STATUS
 
 describe('shipLine', () => {
   test('counts that are zero are left out', () => {
-    expect(shipLine(ship(STATUS_MAIN))).toBe('main ↑4 ↓1 · 2 dirty · 4 unpushed · 1 merged worktree')
+    expect(shipLine(ship(STATUS_MAIN))).toBe('main ↑4 ↓1 · 2 dirty · 3 unpushed · 1 merged worktree')
     expect(shipLine(clean({ dirty: 3, merged: [{ branch: 'a', path: '/a' }, { branch: 'b', path: '/b' }] }))).toBe('main · 3 dirty · 2 merged worktrees')
   })
 
@@ -155,16 +183,16 @@ describe('shipLine', () => {
   })
 
   test('a detached HEAD and a repo with no commits say so', () => {
-    expect(shipLine(shipOf({ status: parseStatus(STATUS_DETACHED)!, branches: [], merged: [], worktrees: [], defaultBranch: undefined, ignore: [] })))
+    expect(shipLine(shipOf({ status: parseStatus(STATUS_DETACHED)!, branches: [], merged: [], worktrees: [], defaultBranch: undefined, fresh: [], ignore: [] })))
       .toBe('detached HEAD · committed and pushed')
-    expect(shipLine(shipOf({ status: parseStatus(STATUS_INITIAL)!, branches: [], merged: [], worktrees: [], defaultBranch: undefined, ignore: [] })))
+    expect(shipLine(shipOf({ status: parseStatus(STATUS_INITIAL)!, branches: [], merged: [], worktrees: [], defaultBranch: undefined, fresh: [], ignore: [] })))
       .toBe('main, no commits · 1 dirty')
   })
 })
 
 describe('shipStatus', () => {
   test('a short line only while something is unshipped; behind alone is not', () => {
-    expect(shipStatus(ship(STATUS_MAIN))).toBe(' main ↑4 ↓1 · 2 dirty · 4 unpushed · 1 merged')
+    expect(shipStatus(ship(STATUS_MAIN))).toBe(' main ↑4 ↓1 · 2 dirty · 3 unpushed · 1 merged')
     expect(shipStatus(clean())).toBeUndefined()
     expect(shipStatus(clean({ behind: 3 }))).toBeUndefined()
     expect(shipStatus(undefined)).toBeUndefined()

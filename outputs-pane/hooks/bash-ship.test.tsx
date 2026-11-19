@@ -23,19 +23,24 @@ const CLEAN = {
 // branch, a merged one with no upstream, and a merged worktree.
 const UNSHIPPED = {
   status: '# branch.oid 1cbf\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +4 -0\n? notes.md\n',
-  branches: 'agent-tree-dings\t\t\nmain\torigin/main\t[ahead 4]\nvendor-spinner\t\t\n',
+  branches: 'agent-tree-dings\t\t\nfresh-br\t\t\nmain\torigin/main\t[ahead 4]\nvendor-spinner\t\t\n',
   origin: 'origin/main\n',
-  merged: 'agent-tree-dings\nmain\n',
-  worktrees: `worktree ${CWD}\nHEAD 1cbf\nbranch refs/heads/main\n\nworktree /Users/me/wt/dings\nHEAD 95c6\nbranch refs/heads/agent-tree-dings\n\n`,
+  merged: 'agent-tree-dings\nfresh-br\nmain\n',
+  worktrees: `worktree ${CWD}\nHEAD 1cbf\nbranch refs/heads/main\n\nworktree /Users/me/wt/dings\nHEAD 95c6\nbranch refs/heads/agent-tree-dings\n\nworktree /Users/me/wt/fresh\nHEAD 1cbf\nbranch refs/heads/fresh-br\n\n`,
+  // dings has commits of its own; fresh-br was created from main and never committed to.
+  reflogs: { 'agent-tree-dings': 'commit: x\nbranch: Created from main\n', 'fresh-br': 'branch: Created from main\n' } as Record<string, string>,
 }
 
-type Git = Partial<typeof CLEAN>
+type Git = Partial<typeof CLEAN> & { initDefault?: string; reflogs?: Record<string, string> }
 type World = {
   platform?: string
   isBashError?: boolean
   isWriteError?: boolean
   found?: string[]
-  findFails?: 'exit' | 'deny'
+  findFails?: 'exit' | 'deny' | 'unreadable'
+  cwd?: string
+  // The first git status read waits for `gate`, then answers `status`: a refresh that lands late.
+  firstStatus?: { gate: Promise<void>; status: string }
   findGate?: Promise<void>
   births?: Record<string, number>
   stats?: Record<string, { kind: 'file' | 'dir'; mtimeMs: number }>
@@ -55,9 +60,11 @@ const world = (on: On, w: World = {}) => {
   const toasts: string[] = []
   const statuses: (string | undefined)[] = []
   let files: OutputFile[] = []
+  let isFirstStatus = true
+  const cwd = w.cwd ?? CWD
   on('tool.call', (_$, e) => ((e.tool === 'Bash' && w.isBashError) || (e.tool === 'Write' && w.isWriteError)
     ? { result: 'exit 1', isError: true } : { result: 'ok' }) as never)
-  on('session.cwd', () => ({ value: CWD }))
+  on('session.cwd', () => ({ value: cwd }))
   on('session.info', () => ({ value: { platform: w.platform ?? 'macos' } }) as never)
   mock.env(on, w.rexFar ? { HOME: '/Users/me', REX_SESSION: 'session:s', REX_BLOCK: 'block:me' } : { HOME: '/Users/me' })
   on('process.run', async (_$, e) => {
@@ -68,6 +75,10 @@ const world = (on: On, w: World = {}) => {
       if (w.findGate) await w.findGate
       if (w.findFails === 'deny') return { deny: 'timed out after 2000 ms' } as never
       if (w.findFails === 'exit') return answer('', 1)
+      if (w.findFails === 'unreadable') {
+        const stdout = (w.found ?? []).map(p => `${p}\n`).join('')
+        return { value: { exitCode: 1, stdout, stderr: `find: ${cwd}/locked: Permission denied\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      }
       return answer((w.found ?? []).map(p => `${p}\n`).join(''))
     }
     if (argv[0] === 'stat') return answer(argv.slice(3).map(p => `${w.births?.[p] ?? 0} ${p}\n`).join(''))
@@ -75,7 +86,17 @@ const world = (on: On, w: World = {}) => {
       const git = w.git
       const sub = argv[4]
       if (!git) return answer('', 128)
+      if (sub === 'status' && w.firstStatus && isFirstStatus) {
+        isFirstStatus = false
+        await w.firstStatus.gate
+        return answer(w.firstStatus.status)
+      }
       if (sub === 'status') return answer(git.status ?? '')
+      if (sub === 'config') return git.initDefault ? answer(git.initDefault) : answer('', 1)
+      if (sub === 'reflog') {
+        const log = git.reflogs?.[(argv[7] ?? '').replace('refs/heads/', '')]
+        return log === undefined ? answer('', 128) : answer(log)
+      }
       if (sub === 'symbolic-ref') return git.origin ? answer(git.origin) : answer('', 128)
       if (sub === 'for-each-ref') return answer(argv.some(a => a.startsWith('--merged=')) ? git.merged ?? '' : git.branches ?? '')
       if (sub === 'worktree') return answer(git.worktrees ?? '')
@@ -128,11 +149,11 @@ const start = ($: E) => $.session.start({ cwd: CWD, surface: 'terminal', isInter
 describe('files made by Bash', () => {
   test('a file made during the call is new, one that existed is edit; a misc one pops the pane', async ($, on) => {
     const w = world(on, {
-      found: [`${CWD}/out/deck.pptx`, `${CWD}/src/main.rs`],
-      births: { [`${CWD}/out/deck.pptx`]: STAMP_S, [`${CWD}/src/main.rs`]: STAMP_S - 600 },
+      found: [`${CWD}/slides/deck.pptx`, `${CWD}/src/main.rs`],
+      births: { [`${CWD}/slides/deck.pptx`]: STAMP_S, [`${CWD}/src/main.rs`]: STAMP_S - 600 },
     })
     await bash($, 'python3 make_deck.py', () => w.clock.settle())
-    expect(w.files().sort()).toEqual([[`${CWD}/out/deck.pptx`, 'new'], [`${CWD}/src/main.rs`, 'edit']])
+    expect(w.files().sort()).toEqual([[`${CWD}/slides/deck.pptx`, 'new'], [`${CWD}/src/main.rs`, 'edit']])
     expect(w.opened).toEqual(['outputs'])
     const ui = await mount($)
     expect(await ui.findAll({ type: 'Button', text: 'deck.pptx' })).toHaveLength(1)
@@ -154,11 +175,14 @@ describe('files made by Bash', () => {
     expect(w.finds()[0]?.timeoutMs).toBeLessThanOrEqual(3000)
   })
 
-  test('the ignore setting prunes folders from the listing and from named paths', { options: { ignore: 'vendor, out*' } }, async ($, on) => {
-    const w = world(on, { found: [], stats: { [`${CWD}/vendor/x.pptx`]: { kind: 'file', mtimeMs: NOW } } })
-    await bash($, `cp a.pptx ${CWD}/vendor/x.pptx`, () => w.clock.settle())
+  test('the ignore setting prunes folders below the working directory, not files and not named paths', { options: { ignore: 'vendor, out*' } }, async ($, on) => {
+    const w = world(on, {
+      found: [`${CWD}/vendor/x.pptx`, `${CWD}/sub/output.pdf`],
+      stats: { '/tmp/vendor/y.pptx': { kind: 'file', mtimeMs: NOW } },
+    })
+    await bash($, 'cp a.pptx /tmp/vendor/y.pptx', () => w.clock.settle())
     expect(w.finds()[0]?.argv).toEqual(findArgv(CWD, stampOf(NOW), ['vendor', 'out*']))
-    expect(w.files()).toEqual([])
+    expect(w.files().map(f => f[0]).sort()).toEqual([`${CWD}/sub/output.pdf`, '/tmp/vendor/y.pptx'])
   })
 
   test('over 50 changed files is a build: none from the listing, paths named in the command still count', async ($, on) => {
@@ -234,11 +258,14 @@ describe('files made by Bash', () => {
 
 describe('the misc section', () => {
   test('code is source, config, markup, known names and dotfiles; planning is markdown and text; the rest is misc', () => {
-    for (const path of ['a.rs', 'a.json', 'a.html', 'a.yaml', 'a.sh', 'a.lock', 'Makefile', 'Dockerfile', 'README', 'README-old', 'LICENSE', '.env', '.gitignore', 'a.tsx', 'a.css', 'a.sql'])
+    for (const path of ['a.rs', 'a.json', 'a.html', 'a.yaml', 'a.sh', 'a.lock', 'Makefile', 'Dockerfile', 'README', 'README-old', 'LICENSE', '.env', '.gitignore', 'a.tsx', 'a.css', 'a.sql',
+      'go.mod', 'go.sum', 'go.work', 'Dockerfile.dev', 'Makefile.am', 'BUILD', 'WORKSPACE', 'meson.build', 'Pipfile', 'Tiltfile', 'Earthfile',
+      'Snakefile', 'a.csproj', 'a.fsproj', 'a.sln', 'a.cabal', 'a.erb', 'a.ejs', 'a.hbs', 'a.njk', 'a.jinja', 'a.j2', 'a.vim', 'a.el', 'a.lisp',
+      'a.bzl', 'a.bazel', 'a.groovy', 'a.tmpl', 'a.js.map'])
       expect([path, fileKind(`/w/${path}`)]).toEqual([path, 'code'])
     for (const path of ['a.md', 'a.MDX', 'a.markdown', 'a.txt'])
       expect([path, fileKind(`/w/${path}`)]).toEqual([path, 'planning'])
-    for (const path of ['deck.pptx', 'a.docx', 'a.xlsx', 'a.pdf', 'a.png', 'a.svg', 'a.mp4', 'a.mov', 'a.mp3', 'a.zip', 'a.tar.gz', 'a.woff2', 'a.csv', 'a.log', 'a.o', 'app', 'dump.parquet', 'Dockerfile.dev'])
+    for (const path of ['deck.pptx', 'a.docx', 'a.xlsx', 'a.pdf', 'a.png', 'a.svg', 'a.mp4', 'a.mov', 'a.mp3', 'a.zip', 'a.tar.gz', 'a.woff2', 'a.csv', 'a.log', 'a.o', 'app', 'dump.parquet', 'build.zip', 'license.pdf'])
       expect([path, fileKind(`/w/${path}`)]).toEqual([path, 'misc'])
   })
 
@@ -321,7 +348,12 @@ describe('ship state', () => {
     await start($)
     await w.clock.settle()
     const subs = new Set(w.gitReads().map(r => r.argv[4]))
-    expect([...subs].sort()).toEqual(['for-each-ref', 'status', 'symbolic-ref', 'worktree'])
+    expect([...subs].sort()).toEqual(['config', 'for-each-ref', 'reflog', 'status', 'symbolic-ref', 'worktree'])
+    expect(w.gitReads().find(r => r.argv[4] === 'config')?.argv.slice(4)).toEqual(['config', '--get', 'init.defaultBranch'])
+    expect(w.gitReads().filter(r => r.argv[4] === 'reflog').map(r => r.argv.slice(4)).sort()).toEqual([
+      ['reflog', 'show', '--format=%gs', 'refs/heads/agent-tree-dings', '--'],
+      ['reflog', 'show', '--format=%gs', 'refs/heads/fresh-br', '--'],
+    ])
     for (const r of w.gitReads()) {
       expect(r.argv.slice(0, 4)).toEqual(['git', '-C', CWD, '--no-optional-locks'])
       expect(r.timeoutMs).toBeLessThanOrEqual(3000)
@@ -333,14 +365,17 @@ describe('ship state', () => {
     await start($)
     await w.clock.settle()
     const ui = await mount($)
-    const line = 'main ↑4 · 1 dirty · 2 unpushed · 1 merged worktree'
+    const line = 'main ↑4 · 1 dirty · 1 unpushed · 1 merged worktree'
     expect(await ui.findAll({ type: 'Button', text: line })).toHaveLength(1)
-    expect(w.statuses.at(-1)).toBe(' main ↑4 · 1 dirty · 2 unpushed · 1 merged')
+    expect(w.statuses.at(-1)).toBe(' main ↑4 · 1 dirty · 1 unpushed · 1 merged')
     expect(await ui.findAll({ text: /vendor-spinner/ })).toHaveLength(0)
 
     await ui.press({ key: 'ship' })
     expect(await ui.findAll({ type: 'Box', key: 'unpushed:vendor-spinner' })).toHaveLength(1)
-    expect(await ui.findAll({ type: 'Box', key: 'unpushed:main' })).toHaveLength(1)
+    // The current branch's ahead count is on the line already.
+    expect(await ui.findAll({ type: 'Box', key: 'unpushed:main' })).toHaveLength(0)
+    // A fresh worktree is merged by ancestry only.
+    expect(await ui.findAll({ type: 'Box', key: 'merged:/Users/me/wt/fresh' })).toHaveLength(0)
     const merged = await ui.findAll({ type: 'Box', key: 'merged:/Users/me/wt/dings' })
     expect(merged).toHaveLength(1)
     expect(merged[0]?.text).toMatch(/agent-tree-dings\s*~\/wt\/dings/)
@@ -354,7 +389,7 @@ describe('ship state', () => {
     await start($)
     await w.clock.settle()
     const ui = await mount($)
-    expect(await ui.findAll({ type: 'Button', text: 'main ↑4 · 1 dirty · 1 unpushed' })).toHaveLength(1)
+    expect(await ui.findAll({ type: 'Button', text: 'main ↑4 · 1 dirty' })).toHaveLength(1)
   })
 
   test('the status entry clears once nothing is unshipped', async ($, on) => {
@@ -420,5 +455,101 @@ describe('ship state', () => {
     await w.clock.advance(90_000)
     await w.clock.settle()
     expect(w.statusReads()).toBe(first)
+  })
+})
+
+describe('fix round 1', () => {
+  test('C1: an extensionless or unknown misc file opens in the editor; only a known misc family uses the opener', async ($, on) => {
+    const w = world(on)
+    for (const [i, name] of ['bin/deploy', 'target/release/app', 'data.xyz', 'deck.pptx'].entries())
+      await $.tool.call({ tool: 'Write', tool_use_id: `w${i}`, file_path: `${CWD}/${name}`, content: 'x' })
+    const ui = await mount($)
+    for (const name of ['bin/deploy', 'target/release/app', 'data.xyz', 'deck.pptx']) await ui.press({ key: `open:${CWD}/${name}` })
+    expect(w.clicked()).toEqual([
+      ['zed', `${CWD}/bin/deploy`], ['zed', `${CWD}/target/release/app`], ['zed', `${CWD}/data.xyz`], ['open', `${CWD}/deck.pptx`],
+    ])
+  })
+
+  test('C1: in Rex from another machine an extensionless misc file opens in the viewer split, not a toast', async ($, on) => {
+    const w = world(on, { rexFar: true })
+    await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: `${CWD}/bin/deploy`, content: 'x' })
+    const ui = await mount($)
+    await ui.press({ key: `open:${CWD}/bin/deploy` })
+    expect(w.toasts.some(t => t.includes('opens only'))).toBe(false)
+  })
+
+  test('I1: a working directory below a folder named build still lists its files', async ($, on) => {
+    const cwd = '/Users/me/build/p'
+    const w = world(on, { cwd, found: [`${cwd}/src/a.ts`], births: { [`${cwd}/src/a.ts`]: STAMP_S } })
+    await bash($, 'npm run gen', () => w.clock.settle())
+    expect(w.files()).toEqual([[`${cwd}/src/a.ts`, 'new']])
+  })
+
+  test('I1: a named path is not put through the skip list', async ($, on) => {
+    const w = world(on, { stats: { '/Users/me/Movies/dist/out.mp4': { kind: 'file', mtimeMs: NOW } } })
+    await bash($, 'ffmpeg -i a.mov /Users/me/Movies/dist/out.mp4', () => w.clock.settle())
+    expect(w.files()).toEqual([['/Users/me/Movies/dist/out.mp4', 'new']])
+  })
+
+  test('I3: files in dot folders below the working directory are not listed', async ($, on) => {
+    const w = world(on, { found: [`${CWD}/.pytest_cache/v/cache/lastfailed`, `${CWD}/coverage/lcov.info`, `${CWD}/out/x.js`, `${CWD}/a.py`] })
+    await bash($, 'pytest', () => w.clock.settle())
+    expect(w.files()).toEqual([[`${CWD}/a.py`, 'new']])
+  })
+
+  test('I3: a Bash-made file that is misc only by elimination is listed without popping the pane', async ($, on) => {
+    const w = world(on, { found: [`${CWD}/data/dump.bin`, `${CWD}/bin/tool`] })
+    await bash($, 'make dump', () => w.clock.settle())
+    expect(w.files()).toHaveLength(2)
+    expect(w.opened).toEqual([])
+  })
+
+  test('I5: a listing that exits 1 over an unreadable folder keeps what it printed', async ($, on) => {
+    const w = world(on, { findFails: 'unreadable', found: [`${CWD}/a.pptx`] })
+    await bash($, 'make', () => w.clock.settle())
+    expect(w.files()).toEqual([[`${CWD}/a.pptx`, 'new']])
+  })
+
+  test('M1: one listing at a time; calls that end meanwhile share the next one', async ($, on) => {
+    let release = () => {}
+    const gate = new Promise<void>(resolve => (release = resolve))
+    const w = world(on, { findGate: gate, found: [`${CWD}/a.rs`] })
+    for (const i of [1, 2, 3]) await $.tool.call({ tool: 'Bash', tool_use_id: `b${i}`, command: `step ${i}` } as never)
+    await w.clock.settle()
+    expect(w.finds()).toHaveLength(1)
+    release()
+    await w.clock.settle()
+    await w.clock.settle()
+    expect(w.finds()).toHaveLength(2)
+  })
+
+  test('M1: a ship refresh that answers late does not overwrite a newer one', async ($, on) => {
+    let release = () => {}
+    const gate = new Promise<void>(resolve => (release = resolve))
+    const w = world(on, { git: CLEAN, firstStatus: { gate, status: UNSHIPPED.status } })
+    await start($)
+    await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: `${CWD}/a.rs`, content: 'x' })
+    await w.clock.settle()
+    release()
+    await w.clock.settle()
+    await w.clock.settle()
+    const ui = await mount($)
+    expect(await ui.findAll({ type: 'Button', text: 'main · committed and pushed' })).toHaveLength(1)
+    expect(w.statuses.at(-1)).toBeUndefined()
+  })
+
+  test('M2: .DS_Store and editor swap and backup files are never listed', async ($, on) => {
+    const w = world(on, { found: [`${CWD}/.DS_Store`, `${CWD}/src/.main.rs.swp`, `${CWD}/notes.md~`, `${CWD}/.#main.rs`, `${CWD}/src/main.rs`] })
+    await bash($, 'vim -c wq src/main.rs', () => w.clock.settle())
+    expect(w.files()).toEqual([[`${CWD}/src/main.rs`, 'new']])
+  })
+
+  test('M3: with no origin HEAD, init.defaultBranch names the default branch', async ($, on) => {
+    const w = world(on, { git: { status: CLEAN.status, branches: 'develop\t\t\nmerged-x\t\t\n', merged: 'develop\nmerged-x\n', worktrees: CLEAN.worktrees, initDefault: 'develop\n' } })
+    await start($)
+    await w.clock.settle()
+    expect(w.gitReads().some(r => r.argv.includes('--merged=develop'))).toBe(true)
+    const ui = await mount($)
+    expect(await ui.findAll({ type: 'Button', text: 'main · committed and pushed' })).toHaveLength(1)
   })
 })
