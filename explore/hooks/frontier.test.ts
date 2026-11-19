@@ -132,10 +132,16 @@ describe('a round whose questions carry option briefs', () => {
     for (const q of qs) expect(q.body).toBe(between(q.n))
     expect(qs[0]?.body.split('\n')).toHaveLength(14)
     expect(qs[0]?.body).toMatch(/^Explore appends one line per open, exploration and take\. Options:\n- \*\*\(a\) `~\/\.local/)
-    expect(qs[0]?.body).toMatch(/  - Scale: one more artifact per session, every day of the trial\.$/)
+    expect(qs[0]?.body).toMatch(/  - Scalability: one more artifact per session, every day of the trial\.$/)
     expect(qs[3]?.body).toMatch(/  - Touches: the trial review \(I071\) and anyone auditing it\.\n\nSecurity: the log holds question titles, which can name private projects\. It stays on this machine, in the home folder, and nothing sends it anywhere\.$/)
+    // All-cheap questions collapse to one line per option: label, downside, the bare word cheap, what it touches.
+    for (const i of [1, 2, 4]) expect(qs[i]?.body.split('\n').slice(1).every(l => /^- \(.\) .+: .+; cheap; touches .+\.$/.test(l))).toBe(true)
     expect(qs[4]?.body).toBe(
-      'Options:\n- (a) `open`, `exploration`, `take`, the ticket\'s words: cheap; touches explore and the review.\n- (b) `open`, `fork`, `take`, the engine\'s words: cheap; touches the same.',
+      [
+        'Options:',
+        "- (a) `open`, `exploration`, `take`, the ticket's words: a follow-up has no name of its own; cheap; touches explore and the review.",
+        "- (b) `open`, `fork`, `take`, the engine's words: the review has to map them back to the ticket's; cheap; touches explore and the review.",
+      ].join('\n'),
     )
   })
 
@@ -167,7 +173,7 @@ describe("a question's reversibility", () => {
   })
 
   test('only the labelled reversibility counts where a brief labels it, not the scale words in prose', () => {
-    // Q3's body says "one-way option" in its question; its options are labelled cheap.
+    // Q3's body says "one-way option" in its question, outside its options; its options are all cheap.
     expect(qs[2]?.body).toMatch(/one-way option/)
     expect(reversibility(qs[2]?.body ?? '')).toBe('cheap')
     expect(reversibility('- (a) x\n  - Downside: costly to run.\n  - **Reversibility:** cheap.')).toBe('cheap')
