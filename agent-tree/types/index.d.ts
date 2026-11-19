@@ -98,6 +98,8 @@ export type Snapshot = {
   repos: Record<string, string>
   batch: BatchCounts | null
   error: string
+  /** When the multiplexer last answered; absent in snapshots kept from before it was kept, or before any answer. */
+  seenAt?: number
 }
 
 export type Panel = {
@@ -155,7 +157,8 @@ declare module 'claude-code' {
       inproc: InProcRun[]
       edgeCount: number
       dings: Ding[]
-      pace: Pace | null
+      /** Each batch's pace, the most recently seen last. A lone record or null is state kept from before the book. */
+      pace: Pace[] | Pace | null
     }
   }
   /** The mod's own tool, so `{ tool: "mcp__agent-tree__team_status" }` names one whatever MCP servers the types were saved with. */

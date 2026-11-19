@@ -1,6 +1,6 @@
 import type { ApiError, HerdrAgent, ModelChange, NodeStatus, Panel, TreeNode, Usage } from '../types'
 import { repoName } from './tickets'
-import { isLive } from './tree'
+import { isLiveNode } from './tree'
 import { fmtCost, fmtTime, fmtTokens, modelName, windowOf } from './usage'
 
 export const STATUS_GLYPH: Record<NodeStatus, string> = { working: '●', idle: '◌', blocked: '!', done: '✓', gone: '✗' }
@@ -50,7 +50,7 @@ export const needText = (n: number): string => `${n} need${n === 1 ? 's' : ''} y
 
 /** An errored row counts as errored, not also as blocked or idle. */
 export const statusLine = (nodes: TreeNode[], needYou = 0): string | undefined => {
-  const live = nodes.filter(n => isLive(n.status))
+  const live = nodes.filter(isLiveNode)
   const need = needYou ? needText(needYou) : ''
   if (!live.length) return need || undefined
   const working = live.filter(n => n.status === 'working').length

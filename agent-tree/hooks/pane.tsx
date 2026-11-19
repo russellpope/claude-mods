@@ -31,9 +31,9 @@ import {
   wasText,
 } from './view'
 
-export type PaneModel = { snap: Snapshot; panel: Panel; frame: number; inproc: InProcRun[]; dings: Ding[]; pace: Pace | null; cols: number; surface: string }
+export type PaneModel = { snap: Snapshot; panel: Panel; frame: number; inproc: InProcRun[]; dings: Ding[]; pace: Pace[]; cols: number; surface: string }
 /** `ack` with no pane acks every open ding. `cont` sends an errored agent the continue prompt. */
-export type PaneActions = { focus: (pane: string) => void; ack: (pane?: string) => void; setPanel: (fn: (p: Panel) => Panel) => void; cont: (pane: string) => void }
+export type PaneActions = { focus: (pane: string) => void; ack: (pane?: string) => void; setPanel: (fn: (p: Panel) => Panel) => void; cont: (pane: string, session: string) => void }
 
 // `ui` is `$.ui.resolve(e)` for a Pane render; typed loosely so the terminal and desktop tables both fit.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,6 +45,8 @@ const NAME_MIN = 12
 const METER_DOTS = 10
 const TIME_WIDTH = 8
 const MARK_COLOR = '#D0453F'
+// The `continue` label.
+const CONTINUE_WIDTH = 8
 
 export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   const { Box, Text, Button } = ui
@@ -58,6 +60,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   const cols = rowColumns(shown, NAME_MAX)
   // A transcript read before any model answered (a first turn that died on an API error) has no numbers to show.
   const hasUsage = shown.some(n => n.usage?.model)
+  const hasErrored = shown.some(n => n.apiError)
   const marked = new Set(m.dings.filter(d => d.isOpen).map(d => d.pane))
   // Fixed column widths line the rows up on the terminal; other surfaces lay them out themselves.
   const fixed = (width: number) => (m.surface === 'terminal' ? { width, flexShrink: 0 } : {})
@@ -110,7 +113,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         {dots(batchPct, 12).filled ? <Text color="#3B9C5F">{dots(batchPct, 12).filled}</Text> : null}
         {dots(batchPct, 12).empty ? <Text dimColor>{dots(batchPct, 12).empty}</Text> : null}
       </Box>
-      <Text dimColor>{batchText(snap.batch, m.pace)}</Text>
+      <Text dimColor>{batchText(snap.batch, m.pace, snap.at)}</Text>
     </Box>
   ) : null
 
@@ -147,7 +150,7 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
   // An errored row shows the warning mark in place of its status glyph.
   const glyph = (n: TreeNode) => (n.apiError ? ERROR_GLYPH : STATUS_GLYPH[n.status])
   const glyphColor = (n: TreeNode) => (n.apiError ? MARK_COLOR : STATUS_COLOR[n.status])
-  const continueButton = (n: TreeNode) => (n.apiError ? <Button key={`c-${n.pane}-${n.startedAt}`} label="continue" plain onPress={() => act.cont(n.pane)} /> : null)
+  const continueButton = (n: TreeNode) => (n.apiError ? <Button key={`c-${n.pane}-${n.startedAt}`} label="continue" plain onPress={() => act.cont(n.pane, n.session)} /> : null)
 
   const nodeRow = (n: TreeNode) => {
     if (compact)
@@ -209,7 +212,12 @@ export function drawPane(ui: UI, m: PaneModel, act: PaneActions) {
         <Box key="time" {...fixed(TIME_WIDTH)}>
           <Text dimColor>{spanText(n)}</Text>
         </Box>
-        {continueButton(n)}
+        {hasErrored ? (
+          // A fixed cell on every row, so the notes line up whether a row has the button or not.
+          <Box key={`k-${n.pane}-${n.startedAt}`} {...fixed(CONTINUE_WIDTH)}>
+            {continueButton(n)}
+          </Box>
+        ) : null}
         {note ? (
           <Text key="note" dimColor wrap="truncate-end">
             {note}

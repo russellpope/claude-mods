@@ -11,7 +11,7 @@ import type { TreeNode, Usage } from '../types'
 import { addRollout, codexUsage } from './codex'
 import { completeRun, spawnRun, stepRun } from './inproc'
 import { drawPane } from './pane'
-import { observeBatch } from './pace'
+import { observeBook, paceBook } from './pace'
 import { teamStatusText } from './status'
 import type { StatusScope } from './status'
 import { TICKET_GREP_ARGV, batchCounts, batchStamp, parseTicketGrep, repoFromCommonDir, ticketFor } from './tickets'
@@ -41,7 +41,7 @@ export const inproc = atom({ plugin: 'agent-tree', key: 'inproc' } as const, [] 
 export const edgeCount = atom({ plugin: 'agent-tree', key: 'edgeCount' } as const, 0)
 export const dings = atom({ plugin: 'agent-tree', key: 'dings' } as const, [] as Ding[])
 // Session state, so a reload keeps the batch's observed closes.
-export const pace = atom({ plugin: 'agent-tree', key: 'pace' } as const, null as Pace | null)
+export const pace = atom({ plugin: 'agent-tree', key: 'pace' } as const, [] as Pace[] | Pace | null)
 
 export const TEAM_STATUS = 'team_status'
 export const TEAM_STATUS_TOOL = 'mcp__agent-tree__team_status'
@@ -310,6 +310,8 @@ const rexPlaceholder = (pane: string, name: string): HerdrAgent => ({
 let running: Promise<void> | null = null
 // When the last full refresh (usage and tickets read) finished its snapshot.
 let fullAt = -Infinity
+// When team_status last found the multiplexer not answering: it waits FRESH_MS before asking again.
+let downAt = -Infinity
 
 // A press always answers: the multiplexer jumps to the pane, or a toast says why it could not.
 async function focusPane($: EngineInterface, pane: string): Promise<boolean> {
@@ -377,6 +379,7 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
   }
   const agents = await listAgents($, mux)
   if (!agents) {
+    // seenAt stays: the state kept is as old as the last answer.
     await update($, snapshot, s => ({ ...s, at, root, error: `${muxName(mux)} is not answering.` }))
     return
   }
@@ -410,50 +413,114 @@ async function refreshOnce($: EngineInterface, full: boolean): Promise<void> {
     repos = await reposFor($, [...nodes.map(n => n.cwd), ...agents.map(a => a.cwd)])
     ;({ nodes, batch } = await withTickets($, nodes, repos, at))
     const seen = batch
-    const before = await read($, pace)
-    if (observeBatch(before, seen, at) !== before) await update($, pace, p => observeBatch(p, seen, at))
+    const before = paceBook(await read($, pace))
+    if (observeBook(before, seen, at) !== before) await update($, pace, p => observeBook(paceBook(p), seen, at))
   }
   nodes = markErrors(nodes)
-  await update($, snapshot, () => ({ at, root, nodes, all: agents, repos, batch, error: '' }))
+  await update($, snapshot, () => ({ at, root, nodes, all: agents, repos, batch, error: '', seenAt: at }))
   if (full) fullAt = at
   $.ui.status(statusLine(nodes, needYou(log)))
 }
 
 /** The snapshot, refreshed first when the last full refresh is older than FRESH_MS. It never waits for a change. */
 async function freshSnapshot($: EngineInterface): Promise<Snapshot> {
-  // A refresh already running may be a light one (no usage): then one more, full.
-  for (let i = 0; i < 2 && (await $.clock.now()) - fullAt >= FRESH_MS; i++) await refresh($, true)
+  // A refresh already running may be a light one (no usage): then one more, full. A failed one is not
+  // tried again for FRESH_MS, so a down multiplexer costs one list per 2 s, not two per call.
+  for (let i = 0; i < 2; i++) {
+    const now = await $.clock.now()
+    if (now - fullAt < FRESH_MS || now - downAt < FRESH_MS) break
+    await refresh($, true)
+    if ((await read($, snapshot)).error) {
+      downAt = await $.clock.now()
+      break
+    }
+  }
   return read($, snapshot)
 }
 
 async function teamStatus($: EngineInterface, scope: StatusScope): Promise<string> {
   const snap = await freshSnapshot($)
-  return teamStatusText({ snap, dings: await read($, dings), pace: await read($, pace), scope })
+  return teamStatusText({ snap, dings: await read($, dings), pace: paceBook(await read($, pace)), scope })
+}
+
+// Panes with a continue under way: a second press while one runs is refused.
+const sending = new Set<string>()
+// Pane → the error a continue was sent for (its session and time). Until the transcript moves on, the row
+// may still read errored, and a repeat would queue the prompt twice.
+const answered = new Map<string, string>()
+const errorKey = (n: TreeNode): string => `${n.session}@${n.apiError?.at ?? ''}`
+// After the Enter, how long until Rex is asked whether the agent took it.
+const ENTER_CHECK_MS = 1000
+
+/**
+ * One press, at most one prompt. The tree is refreshed first, and the prompt goes only to the agent the row
+ * showed (same session when both are known), still errored, not working, and not already sent this error.
+ * On Rex the Enter is confirmed by seeing the agent work; a lost one is pressed once more. Every press ends
+ * in a toast.
+ */
+async function continueAgent($: EngineInterface, pane: string, shownSession: string, text: string): Promise<void> {
+  const say = (msg: string) => $.ui.toast(`agent-tree: ${msg}`)
+  if (sending.has(pane)) {
+    const n = (await read($, snapshot)).nodes.find(x => x.pane === pane)
+    return say(`already sending continue to ${n?.name || pane}`)
+  }
+  sending.add(pane)
+  try {
+    await sendContinue($, pane, shownSession, text, say)
+  } finally {
+    sending.delete(pane)
+  }
+}
+
+async function sendContinue($: EngineInterface, pane: string, shownSession: string, text: string, say: (msg: string) => void): Promise<void> {
+  await refresh($, true)
+  const snap = await read($, snapshot)
+  const node = snap.nodes.find(n => n.pane === pane)
+  const name = node?.name || pane
+  const refuse = (why: string) => say(`did not send continue to ${name}: ${why}`)
+  if (snap.error) return refuse(snap.error.replace(/\.$/, ''))
+  const target = snap.all.find(a => a.pane === pane && (!node?.mux || a.mux === node.mux))
+  if (!node || !target) return refuse('it is no longer listed')
+  if (shownSession && target.session && shownSession !== target.session) return refuse('the pane now holds another agent')
+  if (target.status === 'working') return refuse('it is working')
+  if (!node.apiError) return refuse('it is no longer errored')
+  if (answered.get(pane) === errorKey(node)) return refuse('already sent, and its transcript has not moved on')
+  const argvs = promptArgvs(target, text)
+  if (!argvs.length) return refuse('its Rex session is not known')
+  for (const argv of argvs) {
+    const r = await runArgv($, argv)
+    if (r) return say(`could not send continue to ${name}: ${r}`)
+  }
+  // The text is in: pressing again would type it twice.
+  answered.set(pane, errorKey(node))
+  if (target.mux === 'rex' && !(await rexTookEnter($, target, argvs[argvs.length - 1] ?? []))) {
+    say(`typed continue into ${name}, but it is not working: the text may be waiting in its composer`)
+  } else {
+    say(`sent continue to ${name}`)
+  }
+  await refresh($, true)
+}
+
+/** Runs one command: empty when it worked, else why not. */
+async function runArgv($: EngineInterface, argv: string[]): Promise<string> {
+  const r = await $.process.run(argv, { timeoutMs: 5000 }).catch((err: unknown) => String(err))
+  if (typeof r !== 'string' && r.exitCode === 0) return ''
+  return typeof r === 'string' ? r : (argv[0] === 'herdr' ? herdrError(r.stdout) : '') || r.stderr.trim() || `exit ${r.exitCode}`
 }
 
 /**
- * Sends one prompt to an errored agent, by its own multiplexer, after a fresh look at its status: an agent
- * working by then gets nothing. Every press ends in a toast: sent, or why not.
+ * A fresh Claude Code pane can drop an Enter that arrives right behind the text. Seen working a second
+ * after it: taken. Otherwise Enter once more (never the text), and look once more.
  */
-async function continueAgent($: EngineInterface, pane: string, text: string): Promise<void> {
-  const say = (msg: string) => $.ui.toast(`agent-tree: ${msg}`)
-  const mux = await muxOf($)
-  const agents = mux ? await listAgents($, mux) : null
-  const known = (await read($, snapshot)).nodes.find(n => n.pane === pane)
-  const name = known?.name || pane
-  if (!agents) return say(`did not send continue to ${name}: ${mux ? `${muxName(mux)} is not answering` : 'not in a herdr or Rex pane'}`)
-  const target = agents.find(a => a.pane === pane && (!known?.mux || a.mux === known.mux))
-  if (!target) return say(`did not send continue to ${name}: it is no longer listed`)
-  if (target.status === 'working') return say(`did not send continue to ${name}: it is working`)
-  const argvs = promptArgvs(target, text)
-  if (!argvs.length) return say(`did not send continue to ${name}: its Rex session is not known`)
-  for (const argv of argvs) {
-    const r = await $.process.run(argv, { timeoutMs: 5000 }).catch((err: unknown) => String(err))
-    if (typeof r !== 'string' && r.exitCode === 0) continue
-    const reason = typeof r === 'string' ? r : (argv[0] === 'herdr' ? herdrError(r.stdout) : '') || r.stderr.trim() || `exit ${r.exitCode}`
-    return say(`could not send continue to ${name}: ${reason}`)
+async function rexTookEnter($: EngineInterface, target: HerdrAgent, enter: string[]): Promise<boolean> {
+  for (let i = 0; i < 2; i++) {
+    if (i > 0 && (await runArgv($, enter))) return false
+    await $.clock.sleep(ENTER_CHECK_MS)
+    const mux = await muxOf($)
+    const agents = mux ? await listAgents($, mux) : null
+    if (agents?.find(a => a.pane === target.pane && a.mux === 'rex')?.status === 'working') return true
   }
-  say(`sent continue to ${name}`)
+  return false
 }
 
 // True from the moment this session opens the pane until ui.panes says it is gone: a session
@@ -591,7 +658,7 @@ export const register: Register = (on, options) => {
         frame: await read($, frame),
         inproc: await read($, inproc),
         dings: await read($, dings),
-        pace: await read($, pace),
+        pace: paceBook(await read($, pace)),
         cols: e.props.bodyColumns || 80,
         surface: e.surface,
       },
@@ -599,7 +666,7 @@ export const register: Register = (on, options) => {
         focus: pane => void focusRow($, pane),
         ack: pane => void ackDings($, pane),
         setPanel: fn => void update($, panel, fn),
-        cont: pane => void continueAgent($, pane, continuePrompt).catch(() => undefined),
+        cont: (pane, session) => void continueAgent($, pane, session, continuePrompt).catch(() => undefined),
       },
     )
   })

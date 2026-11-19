@@ -59,13 +59,30 @@ type Line = {
   effort?: unknown
   timestamp?: string
   isApiErrorMessage?: boolean
+  isMeta?: boolean
   error?: unknown
   apiErrorStatus?: unknown
-  message?: { id?: string; model?: string; usage?: RawUsage }
+  message?: { id?: string; model?: string; usage?: RawUsage; content?: unknown }
 }
 
 /** Claude Code's model for a line it wrote itself, such as an API error: never the agent's model. */
 export const SYNTHETIC = '<synthetic>'
+
+// What a local command (`/model`, `! pwd`) writes as user lines: run in Claude Code, never sent to the agent.
+const LOCAL = /^\s*<(command-name|command-message|command-args|local-command-[a-z-]+|bash-input|bash-stdout|bash-stderr)>/
+
+const firstText = (content: unknown): string => {
+  if (typeof content === 'string') return content
+  const first: unknown = Array.isArray(content) ? content[0] : undefined
+  return first && typeof first === 'object' && typeof (first as { text?: unknown }).text === 'string' ? (first as { text: string }).text : ''
+}
+
+/**
+ * A line that shows the agent went on: a prompt sent to it, or its own answer. Not an isMeta line, a local
+ * command's lines, or a <synthetic> line Claude Code writes itself ('No response requested.').
+ */
+const movesOn = (o: Line): boolean =>
+  o.type === 'user' ? !o.isMeta && !LOCAL.test(firstText(o.message?.content)) : o.message?.model !== SYNTHETIC
 
 const timeOf = (t: unknown): number => {
   const ms = typeof t === 'string' ? Date.parse(t) : NaN
@@ -92,8 +109,7 @@ export const addTranscript = (acc: UsageAcc, text: string): UsageAcc => {
       next.apiError = { reason: typeof o.error === 'string' && o.error ? o.error : 'unknown', status: typeof o.apiErrorStatus === 'number' ? o.apiErrorStatus : null, at: timeOf(o.timestamp) }
       continue
     }
-    // Any later main-chain line of the conversation: the agent went on.
-    delete next.apiError
+    if (movesOn(o)) delete next.apiError
     const u = o.message?.usage
     if (o.type !== 'assistant' || !u || o.message?.model === SYNTHETIC) continue
     const model = o.message?.model || next.model

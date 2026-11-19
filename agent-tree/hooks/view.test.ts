@@ -185,3 +185,9 @@ describe('errored rows and model changes', () => {
     expect(wasText({ ...was, effort: '' })).toBe('was Opus 5.5')
   })
 })
+
+describe('status line: errored rows are live (fix r1 M6)', () => {
+  test('an errored row with a DONE: title is still counted', () => {
+    expect(statusLine([node({ status: 'done', title: 'DONE: x', apiError: { reason: 'server_error', status: 529, at: 0 } })])).toBe('tree 0● 1⚠')
+  })
+})

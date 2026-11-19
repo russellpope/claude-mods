@@ -24,6 +24,9 @@ export const statusOf = (a: HerdrAgent | null): NodeStatus => {
 
 export const isLive = (s: NodeStatus): boolean => s === 'working' || s === 'idle' || s === 'blocked'
 
+/** A node still in play: a live status, or errored (its turn died and waits on a continue), whatever its title says. */
+export const isLiveNode = (n: Pick<TreeNode, 'status' | 'apiError'>): boolean => isLive(n.status) || Boolean(n.apiError)
+
 export type TreeInput = {
   root: string
   edges: Edge[]
@@ -134,12 +137,12 @@ export const buildTree = (input: TreeInput): { nodes: TreeNode[]; bindings: Reco
 export const partition = (nodes: TreeNode[]): { tree: TreeNode[]; finished: TreeNode[] } => {
   const liveBelow = (i: number): boolean => {
     const d = nodes[i]?.depth ?? 0
-    for (let j = i + 1; j < nodes.length && (nodes[j]?.depth ?? 0) > d; j++) if (isLive(nodes[j]?.status ?? 'gone')) return true
+    for (let j = i + 1; j < nodes.length && (nodes[j]?.depth ?? 0) > d; j++) if (nodes[j] && isLiveNode(nodes[j] as TreeNode)) return true
     return false
   }
   const tree: TreeNode[] = []
   const finished: TreeNode[] = []
-  nodes.forEach((n, i) => (isLive(n.status) || liveBelow(i) ? tree : finished).push(n))
+  nodes.forEach((n, i) => (isLiveNode(n) || liveBelow(i) ? tree : finished).push(n))
   return { tree, finished }
 }
 

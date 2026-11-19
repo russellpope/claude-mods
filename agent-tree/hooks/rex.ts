@@ -196,7 +196,8 @@ export const promptArgvs = (target: HerdrAgent, text: string): string[][] => {
   const server = target.server ? ['-S', target.server] : []
   const at = ['-s', target.workspace, '-b', target.pane]
   return [
-    ['rex', ...server, 'send', ...at, text],
+    // `--`: a prompt that starts with - is text, not a flag.
+    ['rex', ...server, 'send', ...at, '--', text],
     ['rex', ...server, 'send-key', ...at, 'enter'],
   ]
 }

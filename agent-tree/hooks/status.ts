@@ -1,11 +1,11 @@
 import type { Ding, HerdrAgent, Snapshot, TreeNode } from '../types'
 import { batchText } from './pace'
 import type { Pace } from './pace'
-import { countsLine, ctxPercent, errorNote, groupAll, modelLabel, needText, spanText, wasText } from './view'
+import { ageText, countsLine, ctxPercent, errorNote, groupAll, modelLabel, needText, spanText, wasText } from './view'
 
 export type StatusScope = 'tree' | 'all'
 
-export type StatusInput = { snap: Snapshot; dings: Ding[]; pace: Pace | null; scope: StatusScope }
+export type StatusInput = { snap: Snapshot; dings: Ding[]; pace: Pace[]; scope: StatusScope }
 
 const TITLE = /^(DONE|BLOCKED):/i
 
@@ -39,12 +39,17 @@ export const teamStatusText = ({ snap, dings, pace, scope }: StatusInput): strin
   const header = [
     countsLine(snap.nodes),
     open.length ? `${needText(open.length)}: ${names.join(', ')}` : '',
-    snap.batch ? `batch ${snap.batch.stamp} ${batchText(snap.batch, pace)}` : '',
+    snap.batch ? `batch ${snap.batch.stamp} ${batchText(snap.batch, pace, snap.at)}` : '',
     scope === 'all' ? `${snap.all.length} agent${snap.all.length === 1 ? '' : 's'} listed` : '',
   ]
     .filter(Boolean)
     .join(' · ')
-  const stale = snap.error ? [`${snap.error} Last state seen:`] : []
+  // A down multiplexer: say how old the state below is, or that there is none.
+  // A snapshot kept from before seenAt was kept has state of unknown age.
+  const hasState = snap.seenAt !== undefined || snap.nodes.length > 0 || snap.all.length > 0
+  if (snap.error && !hasState) return `${snap.error} No state seen yet.`
+  const age = snap.seenAt === undefined ? 'at an unknown time' : `${ageText(snap.at - snap.seenAt)} ago`
+  const stale = snap.error ? [`${snap.error} Last state seen ${age}:`] : []
   if (scope === 'all') return [...stale, header, ...groupAll(snap.all, snap.repos).flatMap(([repo, list]) => [repo, ...list.map(agentLine)])].join('\n')
   if (!snap.nodes.length) return [...stale, 'No workers spawned from this session yet.'].join('\n')
   return [...stale, header, ...snap.nodes.map(nodeLine)].join('\n')

@@ -207,10 +207,14 @@ describe('promptArgvs', () => {
 
   test("a Rex block: the text into the block in its session, then Enter; another host's through -S", () => {
     expect(promptArgvs(target({ mux: 'rex' }), 'Go on.')).toEqual([
-      ['rex', 'send', '-s', 'session:s1', '-b', 'block:b1', 'Go on.'],
+      ['rex', 'send', '-s', 'session:s1', '-b', 'block:b1', '--', 'Go on.'],
       ['rex', 'send-key', '-s', 'session:s1', '-b', 'block:b1', 'enter'],
     ])
-    expect(promptArgvs(target({ mux: 'rex', server: 'mini' }), 'Go on.')[0]).toEqual(['rex', '-S', 'mini', 'send', '-s', 'session:s1', '-b', 'block:b1', 'Go on.'])
+    expect(promptArgvs(target({ mux: 'rex', server: 'mini' }), 'Go on.')[0]).toEqual(['rex', '-S', 'mini', 'send', '-s', 'session:s1', '-b', 'block:b1', '--', 'Go on.'])
+  })
+
+  test('a prompt that starts with - is text, not a flag (fix r1 M2)', () => {
+    expect(promptArgvs(target({ mux: 'rex' }), '-x')[0]?.slice(-2)).toEqual(['--', '-x'])
   })
 
   test('a herdr pane: one agent prompt, which submits it', () => {
