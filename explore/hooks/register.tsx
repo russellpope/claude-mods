@@ -6,6 +6,8 @@ import { drawBand, exploredKey, focusTarget, NO_QUESTIONS } from './drawer'
 import type { DrawerActions } from './drawer'
 import { findFrontier, hashText, parseFrontier } from './frontier'
 import { artifactBody, failure, forkPrompt, listingPrompt, summaryPrompt, summaryText, takeText } from './prompts'
+import { usageLine, usagePath } from './usage'
+import type { UsageEvent } from './usage'
 
 export const COMMAND = 'explore'
 const ARTIFACTS_SHOW = 'mcp__artifacts__show'
@@ -38,6 +40,24 @@ const setEx = ($: EngineInterface, key: string, fn: (ex: Exploration) => Explora
   })
 
 const getEx = async ($: EngineInterface, key: string) => (await read($, explorations))[key]
+
+// The usage log's appends, one after another, so two close together don't both read the file before either writes.
+let logged: Promise<void> = Promise.resolve()
+
+/** Appends one usage line. No HOME, or a log that exists but can't be read, writes nothing: it never truncates the log. */
+async function appendUsage($: EngineInterface, event: UsageEvent, q: Question) {
+  const home = (await $.env.get('HOME')) ?? ''
+  if (!home) return
+  const path = usagePath(home)
+  const at = await $.clock.now()
+  const old = (await $.fs.exists(path)) ? String(await $.fs.read(path)) : ''
+  await $.fs.write(path, old + usageLine(at, event, q))
+}
+
+/** Logs a question's open, exploration, follow-up or take in the background; a failure is dropped, so the drawer never waits on it. */
+function logUsage($: EngineInterface, event: UsageEvent, q: Question) {
+  logged = logged.then(() => appendUsage($, event, q)).catch(() => undefined)
+}
 
 // A fork that rejects instead of answering is a failure like any other.
 const rejected = (err: unknown) => ({ isAnswered: false as const, reason: 'rejected', error: err instanceof Error ? err.message : String(err) })
@@ -82,6 +102,7 @@ export async function runFork($: EngineInterface, key: string, ask: string) {
   const ms = (await $.clock.now()) - started
   if (r.isAnswered) {
     await setEx($, key, e => ({ ...e, status: 'idle', pending: null, turns: [...e.turns, { ask, answer: r.text, ms, tokens: r.usage.output_tokens }] }))
+    logUsage($, ask ? 'follow-up' : 'exploration', ex)
   } else {
     const f = failure(r)
     await setEx($, key, e => ({ ...e, status: 'failed', error: f.error, canRetry: f.canRetry }))
@@ -95,6 +116,7 @@ async function exploreQuestion($: EngineInterface, f: FrontierView, q: Question,
   const view: DrawerView = { view: 'exploration', key }
   if (open) await openDrawer($, view)
   else await update($, drawer, () => view)
+  logUsage($, 'open', q)
   const ex = await getEx($, key)
   if (ex && !ex.turns.length && ex.status === 'idle') void runFork($, key, '').catch(() => undefined)
 }
@@ -107,6 +129,8 @@ async function takeBack($: EngineInterface, key: string, text: string) {
     $.ui.toast(copied.isCopied ? `copied, to paste into your reply: ${text}` : `could not insert or copy: ${text}`)
   }
   await setEx($, key, e => ({ ...e, taken: [...e.taken, text] }))
+  const ex = await getEx($, key)
+  if (ex) logUsage($, 'take', ex)
 }
 
 /** One more fork, at low effort, for where the owner lands in their own words; taken back as `n: <summary>`. */

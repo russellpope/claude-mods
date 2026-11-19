@@ -1,6 +1,6 @@
 # explore
 
-A drawer above the prompt for one question of a grilling round. A grill (`/grill-with-docs`, a `/wayfinder` grilling ticket) asks seven to twelve questions at once. Most take a word, and one needs thought. Press the hint above the prompt, pick that one, and the drawer lays out its options, what each costs and risks, how reversible it is, and a recommendation. Ask follow-ups there, press `take B`, and `5: B, <option>` lands at the cursor in your reply. None of it enters the conversation.
+A drawer above the prompt for one question of a grilling round. A grill (`/grill-with-docs`, a `/wayfinder` grilling ticket) asks seven to twelve questions at once. Most take a word, and one needs thought. Press the hint above the prompt, pick that one, and the drawer starts from the option brief the question already carries and goes further: each option's second-order effects, how options could be combined, a check of the brief's own claims, and a recommendation. A question with no brief gets one first. Ask follow-ups there, press `take B`, and `5: B, <option>` lands at the cursor in your reply. None of it enters the conversation.
 
 Requires Claude Code 2.1.318 or later.
 

@@ -105,3 +105,22 @@ export function hashText(text: string): string {
   }
   return (h >>> 0).toString(16).padStart(8, '0')
 }
+
+/** A question's reversibility as its option brief states it, on the cheap / costly / one-way scale; '' when it states none. */
+export type Reversibility = '' | 'cheap' | 'costly' | 'one-way'
+
+const SCALE = ['cheap', 'costly', 'one-way'] as const
+const WORD = /\b(cheap|costly|one-way)\b/giu
+const LABELLED = /reversib\w*\W*?\b(cheap|costly|one-way)\b/giu
+
+/**
+ * The most severe reversibility a question's body states (one-way over costly over cheap), or ''. Where the brief
+ * labels it (`Reversibility: costly`), only labelled values count, so a downside that is "costly to run" doesn't; a
+ * one-line brief with no label counts its scale words.
+ */
+export function reversibility(body: string): Reversibility {
+  const labelled = [...body.matchAll(LABELLED)].map(m => m[1] ?? '')
+  const found = (labelled.length ? labelled : [...body.matchAll(WORD)].map(m => m[1] ?? '')).map(w => w.toLowerCase())
+  for (const level of [...SCALE].reverse()) if (found.includes(level)) return level
+  return ''
+}

@@ -3,7 +3,7 @@ import type { TestBody } from 'claude-code/testing'
 
 import type { Exploration } from '../types'
 import { focusTarget, NO_QUESTIONS } from './drawer'
-import { GRILL_ROUND_1 } from './fixtures'
+import { BRIEF_ROUND, GRILL_ROUND_1 } from './fixtures'
 import { parseFrontier } from './frontier'
 import { summaryPrompt } from './prompts'
 
@@ -16,6 +16,10 @@ const QUESTION_MARKS = 'Before I start:\n\nPer worktree or per repo?\nKeep the o
 const ANSWER = '### A. One button per option\nFast.\n\n### B. A summary in your voice\nSlower.\n\nRecommendation: A.'
 const USAGE = { input_tokens: 10, output_tokens: 1234, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const BAND_ID = 'band-1'
+const HOME = '/home/me'
+const LOG = `${HOME}/.local/state/explore/usage.tsv`
+/** The time column of every usage line: the mock clock's now. */
+const AT = new Date(NOW).toISOString()
 
 type Msg = { role: 'user' | 'assistant'; text: string }
 type Fork = { isAnswered: true; text: string; usage: typeof USAGE } | { isAnswered: false; reason: string; status?: number | null; error?: string; usage?: typeof USAGE }
@@ -25,9 +29,22 @@ type Save = 'posted' | 'isError' | 'deny' | 'reject'
 /** A session whose transcript starts as `messages` (push to it to go on); records forks, completions, fills, copies, toasts and saves. */
 const session = (
   on: On,
-  opts: { messages?: Msg[]; forks?: Fork[]; listing?: Fork; filled?: boolean; tools?: string[]; hold?: boolean; saves?: Save[] } = {},
+  opts: {
+    messages?: Msg[]; forks?: Fork[]; listing?: Fork; filled?: boolean; tools?: string[]; hold?: boolean; saves?: Save[]
+    /** HOME; null leaves it unset. */
+    home?: string | null
+    /** Files there before the session, by path. */
+    files?: Record<string, string>
+    /** Every write is denied. */
+    denyWrites?: boolean
+    /** Every read is denied, as for a file over the 4 MiB read limit. */
+    denyReads?: boolean
+  } = {},
 ) => {
   const clock = mock.clock(on, { now: NOW })
+  mock.env(on, opts.home === null ? {} : { HOME: opts.home ?? HOME })
+  // The file system, in memory: what the usage log reads and writes.
+  const files: Record<string, string> = { ...(opts.files ?? {}) }
   const transcript: Msg[] = [...(opts.messages ?? [])]
   const seen = {
     forks: [] as string[],
@@ -39,7 +56,16 @@ const session = (
     toasts: [] as string[],
     saves: [] as Record<string, unknown>[],
     commands: [] as { name: string; description?: string; immediate?: true; argumentHint?: string }[],
+    writes: [] as string[],
   }
+  on('fs.exists', async (_$, e) => ({ value: e.path in files }))
+  on('fs.read', async (_$, e) => (!opts.denyReads && e.path in files ? { value: files[e.path] as never } : { deny: `ENOENT: ${e.path}` }))
+  on('fs.write', async (_$, e) => {
+    seen.writes.push(e.path)
+    if (opts.denyWrites) return { deny: 'EACCES' }
+    files[e.path] = e.text
+    return { value: undefined }
+  })
   // hold: each fork waits until the test calls release().
   const gate = { release: () => {} }
   on('session.messages', async () => ({ value: transcript.map(m => ({ ...m, toolUses: [] })) }))
@@ -85,7 +111,7 @@ const session = (
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
   on('prompt.submit', async (_$, e) => ({ text: e.text }))
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  return { clock, seen, gate, transcript }
+  return { clock, seen, gate, transcript, files }
 }
 
 const start = ($: E) => $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
@@ -806,5 +832,119 @@ describe('back', () => {
     expect(await text(ui, 'head')).toMatch(/^explore · 3 questions · from the last message\s*close$/)
     expect(await text(ui, 'row-5')).toMatch(/^\s*5\s*Retry/)
     await ui.unmount()
+  })
+})
+
+describe('the usage log', () => {
+  const briefs = (): Msg[] => [{ role: 'user', text: 'grill me' }, { role: 'assistant', text: BRIEF_ROUND }]
+  /** The log's lines, split into their tab-separated fields. */
+  const lines = (files: Record<string, string>) => (files[LOG] ?? '').split('\n').filter(Boolean).map(l => l.split('\t'))
+
+  test('an open, its exploration and a take: a line each, with time, event, question number, title and reversibility', async ($, on) => {
+    const { clock, files } = session(on, { messages: briefs() })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    const ui = await band($)
+    await ui.press({ key: 'take-B' })
+    await settle(clock)
+    expect(lines(files)).toEqual([
+      [AT, 'open', '4', 'Pruning the log', 'one-way'],
+      [AT, 'exploration', '4', 'Pruning the log', 'one-way'],
+      [AT, 'take', '4', 'Pruning the log', 'one-way'],
+    ])
+    expect(files[LOG]).toMatch(/\n$/)
+    await ui.unmount()
+  })
+
+  test('a question whose brief states no reversibility still logs, with that field empty', async ($, on) => {
+    const { clock, files } = session(on, { messages: grill() })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    expect(files[LOG]).toBe(`${AT}\topen\t4\tWhat "take back" inserts\t\n${AT}\texploration\t4\tWhat "take back" inserts\t\n`)
+  })
+
+  test('picking from the picker opens; a follow-up and take summary log too; the picker alone logs nothing', async ($, on) => {
+    const { clock, files } = session(on, {
+      messages: briefs(),
+      forks: [{ isAnswered: true, text: ANSWER, usage: USAGE }, { isAnswered: true, text: 'Only here.', usage: USAGE }, { isAnswered: true, text: 'A, for now.', usage: USAGE }],
+    })
+    await start($)
+    await explore($)
+    await settle(clock)
+    expect(files[LOG]).toBeUndefined()
+    const ui = await band($)
+    await ui.press({ key: 'pick-1' })
+    await settle(clock)
+    await ui.input({ key: 'follow-up', text: 'and later?' })
+    await settle(clock)
+    await ui.press({ key: 'take-summary' })
+    await settle(clock)
+    expect(lines(files).map(l => [l[1], l[2], l[4]])).toEqual([
+      ['open', '1', 'costly'],
+      ['exploration', '1', 'costly'],
+      ['follow-up', '1', 'costly'],
+      ['take', '1', 'costly'],
+    ])
+    await ui.unmount()
+  })
+
+  test('reopening an explored question logs another open and forks nothing; a fork that fails logs no exploration', async ($, on) => {
+    const { clock, files } = session(on, { messages: briefs(), forks: [{ isAnswered: true, text: ANSWER, usage: USAGE }, { isAnswered: false, reason: 'api-error', status: 529 }] })
+    await start($)
+    await explore($, '2')
+    await settle(clock)
+    await explore($, '2')
+    await settle(clock)
+    await explore($, '5')
+    await settle(clock)
+    expect(lines(files).map(l => [l[1], l[2], l[4]])).toEqual([
+      ['open', '2', 'cheap'],
+      ['exploration', '2', 'cheap'],
+      ['open', '2', 'cheap'],
+      ['open', '5', 'cheap'],
+    ])
+  })
+
+  test('appends to the lines already there', async ($, on) => {
+    const { clock, files } = session(on, { messages: briefs(), files: { [LOG]: 'earlier\topen\t1\tX\t\n' } })
+    await start($)
+    await explore($, '3')
+    await settle(clock)
+    expect(files[LOG]).toMatch(/^earlier\topen\t1\tX\t\n.+\topen\t3\tA question's reversibility when its options differ\tcheap\n/)
+  })
+
+  test('a log that cannot be written leaves the drawer working and says nothing', async ($, on) => {
+    const { clock, seen } = session(on, { messages: briefs(), denyWrites: true })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    expect(seen.writes).toContain(LOG)
+    expect(seen.forks).toHaveLength(1)
+    expect(seen.toasts).toEqual([])
+    const ui = await band($)
+    expect(await text(ui, 'title')).toBe('Q4 · Pruning the log')
+    expect(await text(ui, 'turn-0')).toMatch(/One button per option/)
+    await ui.unmount()
+  })
+
+  test('a log that exists but cannot be read is left alone, not overwritten', async ($, on) => {
+    const { clock, seen, files } = session(on, { messages: briefs(), files: { [LOG]: 'earlier\n' }, denyReads: true })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    expect(seen.writes).toEqual([])
+    expect(files[LOG]).toBe('earlier\n')
+    expect(seen.forks).toHaveLength(1)
+  })
+
+  test('with no HOME, nothing is written and the exploration still forks', async ($, on) => {
+    const { clock, seen } = session(on, { messages: briefs(), home: null })
+    await start($)
+    await explore($, '4')
+    await settle(clock)
+    expect(seen.writes).toEqual([])
+    expect(seen.forks).toHaveLength(1)
   })
 })

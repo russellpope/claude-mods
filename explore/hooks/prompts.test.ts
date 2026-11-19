@@ -18,6 +18,40 @@ describe('prompts', () => {
     expect(p).toMatch(/`### A\. <name>`, `### B\. <name>`/)
   })
 
+  test('the first fork starts from the inline option brief and asks for more than it', () => {
+    const p = forkPrompt(EX, '')
+    // It names the brief the question already carries, and says not to repeat it.
+    expect(p).toMatch(/option brief/)
+    expect(p).toMatch(/already read/)
+    expect(p).toMatch(/[Dd]o not repeat it/)
+    // What going further means: second-order effects, combining options, and checking the brief's own claims.
+    expect(p).toMatch(/second-order effects/)
+    expect(p).toMatch(/combined/)
+    expect(p).toMatch(/[Cc]heck the brief's own claims/)
+    // It no longer asks for a fresh breakdown of each option.
+    expect(p).not.toMatch(/For each, say what it means, its impact on the current work, its cost and risk, and how reversible it is\./)
+    // The question comes before the instructions, so "the brief above" points at it.
+    expect(p.indexOf('Question Q5')).toBeLessThan(p.indexOf('option brief'))
+  })
+
+  test('a question with no brief still gets one first, then the rest', () => {
+    expect(forkPrompt(EX, '')).toMatch(/If the question carries no brief, give each option one first: its main downside, its reversibility \(cheap, costly or one-way\) and what it touches\./)
+  })
+
+  test('a follow-up prompt is unchanged: the question, the exploration so far, the follow-up, and nothing about the brief', () => {
+    const ex = { ...EX, turns: [{ ask: '', answer: 'first', ms: 0, tokens: 0 }] }
+    expect(forkPrompt(ex, 'and then?')).toBe(
+      [
+        'This is a side exploration, outside the main work. Do not continue the main task, call no tools, and do not answer the other questions. The owner reads your answer in a drawer above the prompt and decides there.',
+        "Question Q5 · Several explorations\n\nOne or many?\n\nThe grill's recommendation: (b). Comparing is the point.",
+        'The exploration so far:',
+        'first',
+        'Follow-up: and then?',
+        'Answer the follow-up only.',
+      ].join('\n\n'),
+    )
+  })
+
   test('a follow-up carries every turn so far, then the follow-up', () => {
     const ex = { ...EX, turns: [{ ask: '', answer: 'first', ms: 0, tokens: 0 }, { ask: 'why?', answer: 'because', ms: 0, tokens: 0 }] }
     expect(forkPrompt(ex, 'and then?')).toMatch(/The exploration so far:\n\nfirst\n\nFollow-up: why\?\n\nbecause\n\nFollow-up: and then\?\n\nAnswer the follow-up only\.$/)

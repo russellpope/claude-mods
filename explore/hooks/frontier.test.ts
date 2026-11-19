@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { GRILL_ROUND_1 } from './fixtures'
-import { findFrontier, hashText, parseFrontier, parseOptions, questionMarkLines, shortRec } from './frontier'
+import { BRIEF_ROUND, GRILL_ROUND_1 } from './fixtures'
+import { findFrontier, hashText, parseFrontier, parseOptions, questionMarkLines, reversibility, shortRec } from './frontier'
 
 const QUESTION_MARKS = [
   'A few things before I start:',
@@ -104,6 +104,84 @@ describe('parsing a grilling round', () => {
 
   test('a question in bold still ends in ?', () => {
     expect(questionMarkLines('**Q1. One file?**\n**Q2. Two?** \n__Q3. Three?__')).toBe(3)
+  })
+})
+
+describe('a round whose questions carry option briefs', () => {
+  const qs = parseFrontier(BRIEF_ROUND)
+  /** The fixture's text from a question's title line to the blank line before its ➡️: what its body must be. */
+  const between = (n: number) => {
+    const lines = BRIEF_ROUND.split('\n')
+    const from = lines.findIndex(l => l.startsWith(`❓ **Q${n}**`))
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('➡️'))
+    const first = (lines[from] ?? '').replace(/^❓ \*\*Q\d+\*\* - \*\*.+?\*\*: ?/, '')
+    return [first, ...lines.slice(from + 1, to)].join('\n').trim()
+  }
+
+  test('every question, numbered and titled', () => {
+    expect(qs.map(q => [q.n, q.title])).toEqual([
+      [1, 'Where the usage log lives'],
+      [2, 'Line format'],
+      [3, "A question's reversibility when its options differ"],
+      [4, 'Pruning the log'],
+      [5, 'Event names'],
+    ])
+  })
+
+  test('each body is whole: every option bullet, its nested downside, reversibility and touches, and paragraphs after them', () => {
+    for (const q of qs) expect(q.body).toBe(between(q.n))
+    expect(qs[0]?.body.split('\n')).toHaveLength(14)
+    expect(qs[0]?.body).toMatch(/^Explore appends one line per open, exploration and take\. Options:\n- \*\*\(a\) `~\/\.local/)
+    expect(qs[0]?.body).toMatch(/  - Scale: one more artifact per session, every day of the trial\.$/)
+    expect(qs[3]?.body).toMatch(/  - Touches: the trial review \(I071\) and anyone auditing it\.\n\nSecurity: the log holds question titles/)
+    expect(qs[4]?.body).toBe(
+      'Options:\n- (a) `open`, `exploration`, `take`, the ticket\'s words: cheap; touches explore and the review.\n- (b) `open`, `fork`, `take`, the engine\'s words: cheap; touches the same.',
+    )
+  })
+
+  test('each ➡️ recommendation, with what would change it, on its line or the next', () => {
+    expect(qs.map(q => q.rec)).toEqual([
+      "(a). It's where this repo already keeps a mod's local state. I'd change this if the review tooling can only read under `~/.claude`.",
+      '(a), with tabs and newlines in titles turned to spaces. A field that needs nesting would change it.',
+      "(a). The pre-fork question is whether a one-way choice is on the table, not whether it was recommended.\nWhat would change it: the review wanting the recommended option's reversibility as well.",
+      "(a) for the trial. I'd change it if the file passes 1 MiB before the review.",
+      "(a). The review reads the ticket's words; only a second reader with its own names would change it.",
+    ])
+  })
+
+  test('the closing line is no part of the last question', () => {
+    expect(qs[4]?.rec).not.toMatch(/Answer however you like/)
+    expect(qs[4]?.body).not.toMatch(/Answer however you like/)
+  })
+
+  test('as the frontier: found, with all five questions', () => {
+    expect(findFrontier([{ role: 'assistant', text: BRIEF_ROUND }])).toEqual({ kind: 'parsed', text: BRIEF_ROUND, ago: 0, questions: qs })
+  })
+})
+
+describe("a question's reversibility", () => {
+  const qs = parseFrontier(BRIEF_ROUND)
+
+  test('the most severe its brief states: one-way over costly over cheap', () => {
+    expect(qs.map(q => reversibility(q.body))).toEqual(['costly', 'cheap', 'cheap', 'one-way', 'cheap'])
+  })
+
+  test('only the labelled reversibility counts where a brief labels it, not the scale words in prose', () => {
+    // Q3's body says "one-way option" in its question; its options are labelled cheap.
+    expect(qs[2]?.body).toMatch(/one-way option/)
+    expect(reversibility(qs[2]?.body ?? '')).toBe('cheap')
+    expect(reversibility('- (a) x\n  - Downside: costly to run.\n  - **Reversibility:** cheap.')).toBe('cheap')
+  })
+
+  test('a one-line brief with no label: its scale words', () => {
+    expect(reversibility('- (a) x: cheap; touches y.\n- (b) z: one-way; touches w.')).toBe('one-way')
+    expect(reversibility('- (a) x — Costly. Touches y.')).toBe('costly')
+  })
+
+  test('a body that states none: empty', () => {
+    expect(reversibility(qs.length ? GRILL_ROUND_1 : '')).toBe('')
+    expect(reversibility('Per worktree or per repo?')).toBe('')
+    expect(reversibility('')).toBe('')
   })
 })
 
