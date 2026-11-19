@@ -113,14 +113,32 @@ const SCALE = ['cheap', 'costly', 'one-way'] as const
 const WORD = /\b(cheap|costly|one-way)\b/giu
 const LABELLED = /reversib\w*\W*?\b(cheap|costly|one-way)\b/giu
 
+// An option's bullet: `- `, `* `, `+ ` or `1. ` at the start of a line. Its nested lines (indented) belong to it.
+const OPTION = /^ ?(?:[-*+]|\d+[.)])\s/
+const words = (text: string, re: RegExp) => [...text.matchAll(re)].map(m => (m[1] ?? '').toLowerCase())
+
+/** Each option's lines: its bullet line, then the indented lines under it. Prose outside option bullets is in none. */
+function optionBlocks(body: string): string[][] {
+  const blocks: string[][] = []
+  let cur: string[] | null = null
+  for (const line of body.split('\n')) {
+    if (OPTION.test(line)) blocks.push((cur = [line]))
+    else if (cur && /^\s+\S/.test(line)) cur.push(line)
+    else cur = null
+  }
+  return blocks
+}
+
 /**
- * The most severe reversibility a question's body states (one-way over costly over cheap), or ''. Where the brief
- * labels it (`Reversibility: costly`), only labelled values count, so a downside that is "costly to run" doesn't; a
- * one-line brief with no label counts its scale words.
+ * The most severe reversibility a question's options state (one-way over costly over cheap), or ''. Each option counts
+ * on its own: its labelled value (`Reversibility: costly`) where it has one, so a downside "costly to run" doesn't
+ * count, otherwise the scale words on its bullet line (a one-line brief). Prose outside option bullets counts for none.
  */
 export function reversibility(body: string): Reversibility {
-  const labelled = [...body.matchAll(LABELLED)].map(m => m[1] ?? '')
-  const found = (labelled.length ? labelled : [...body.matchAll(WORD)].map(m => m[1] ?? '')).map(w => w.toLowerCase())
+  const found = optionBlocks(body).flatMap(([first = '', ...rest]) => {
+    const labelled = words([first, ...rest].join('\n'), LABELLED)
+    return labelled.length ? labelled : words(first, WORD)
+  })
   for (const level of [...SCALE].reverse()) if (found.includes(level)) return level
   return ''
 }

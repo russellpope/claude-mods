@@ -133,7 +133,7 @@ describe('a round whose questions carry option briefs', () => {
     expect(qs[0]?.body.split('\n')).toHaveLength(14)
     expect(qs[0]?.body).toMatch(/^Explore appends one line per open, exploration and take\. Options:\n- \*\*\(a\) `~\/\.local/)
     expect(qs[0]?.body).toMatch(/  - Scale: one more artifact per session, every day of the trial\.$/)
-    expect(qs[3]?.body).toMatch(/  - Touches: the trial review \(I071\) and anyone auditing it\.\n\nSecurity: the log holds question titles/)
+    expect(qs[3]?.body).toMatch(/  - Touches: the trial review \(I071\) and anyone auditing it\.\n\nSecurity: the log holds question titles, which can name private projects\. It stays on this machine, in the home folder, and nothing sends it anywhere\.$/)
     expect(qs[4]?.body).toBe(
       'Options:\n- (a) `open`, `exploration`, `take`, the ticket\'s words: cheap; touches explore and the review.\n- (b) `open`, `fork`, `take`, the engine\'s words: cheap; touches the same.',
     )
@@ -176,6 +176,18 @@ describe("a question's reversibility", () => {
   test('a one-line brief with no label: its scale words', () => {
     expect(reversibility('- (a) x: cheap; touches y.\n- (b) z: one-way; touches w.')).toBe('one-way')
     expect(reversibility('- (a) x — Costly. Touches y.')).toBe('costly')
+  })
+
+  test('each option counts on its own: a labelled option does not hide an unlabelled one-way option', () => {
+    expect(reversibility('- A. rename — Reversibility: cheap\n- B. drop column — one-way, loses data')).toBe('one-way')
+  })
+
+  test('a question with no option bullets: its prose sets nothing, not "a one-way door"', () => {
+    expect(reversibility('Picking the format now is a one-way door, so think it through.')).toBe('')
+  })
+
+  test('a question with no option bullets: its prose sets nothing, not "cheap to try"', () => {
+    expect(reversibility('Option (a) is cheap to try, and (b) needs a migration.')).toBe('')
   })
 
   test('a body that states none: empty', () => {

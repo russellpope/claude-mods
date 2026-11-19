@@ -20,7 +20,9 @@ describe('prompts', () => {
 
   test('the first fork starts from the inline option brief and asks for more than it', () => {
     const p = forkPrompt(EX, '')
-    // It names the brief the question already carries, and says not to repeat it.
+    // It names the brief, conditionally, since a listed question never has one, and says not to repeat it.
+    expect(p).toMatch(/If the question carries an option brief/)
+    expect(p).not.toMatch(/The question above carries an option brief/)
     expect(p).toMatch(/option brief/)
     expect(p).toMatch(/already read/)
     expect(p).toMatch(/[Dd]o not repeat it/)

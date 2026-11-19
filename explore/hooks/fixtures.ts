@@ -157,7 +157,7 @@ export const BRIEF_ROUND = [
   "  - Reversibility: one-way. Picker opens leave no trace in transcripts, so a deleted log can't be rebuilt.",
   "  - Touches: the trial review (I071) and anyone auditing it.",
   "",
-  "Security: the log holds question titles, which can name private projects. It stays in the home folder, readable by the owner only.",
+  "Security: the log holds question titles, which can name private projects. It stays on this machine, in the home folder, and nothing sends it anywhere.",
   "",
   "➡️ (a) for the trial. I'd change it if the file passes 1 MiB before the review.",
   "",

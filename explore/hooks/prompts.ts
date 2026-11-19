@@ -6,7 +6,7 @@ const SIDE =
 // The first fork starts from the option brief the question carries inline (each option's downside, reversibility and
 // what it touches, and the recommendation with what would change it), which the owner has read, and goes further.
 const SHAPE = [
-  'The question above carries an option brief for each option: its main downside, its reversibility, what it touches across the project, and a recommendation with what would change it. The owner has already read it. Do not repeat it: start from it and go further.',
+  'If the question carries an option brief for each option (its main downside, its reversibility, what it touches across the project, and a recommendation with what would change it), the owner has already read it. Do not repeat it: start from it and go further.',
   'If the question carries no brief, give each option one first: its main downside, its reversibility (cheap, costly or one-way) and what it touches.',
   "Then, for each option, under its own heading: `### A. <name>`, `### B. <name>`, and so on, give its second-order effects: what it leads to later, and what else has to change because of it. Say how options could be combined, or one staged after another, where that works. Check the brief's own claims against what you know of the project, and say which hold, which don't, and which you can't confirm. Then give your recommendation, and what would change it.",
 ].join(' ')
