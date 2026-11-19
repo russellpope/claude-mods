@@ -117,13 +117,15 @@ const LABELLED = /reversib\w*\W*?\b(cheap|costly|one-way)\b/giu
 const OPTION = /^ ?(?:[-*+]|\d+[.)])\s/
 const words = (text: string, re: RegExp) => [...text.matchAll(re)].map(m => (m[1] ?? '').toLowerCase())
 
-/** Each option's lines: its bullet line, then the indented lines under it. Prose outside option bullets is in none. */
+/** Each option's lines: its bullet line, then the indented lines under it, across blank lines. Prose outside option bullets is in none. */
 function optionBlocks(body: string): string[][] {
   const blocks: string[][] = []
   let cur: string[] | null = null
   for (const line of body.split('\n')) {
     if (OPTION.test(line)) blocks.push((cur = [line]))
     else if (cur && /^\s+\S/.test(line)) cur.push(line)
+    // A blank line leaves the option open (a loose list); the next unindented line closes it.
+    else if (!line.trim()) continue
     else cur = null
   }
   return blocks

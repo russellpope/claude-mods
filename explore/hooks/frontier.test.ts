@@ -190,6 +190,14 @@ describe("a question's reversibility", () => {
     expect(reversibility('Option (a) is cheap to try, and (b) needs a migration.')).toBe('')
   })
 
+  test('a loose list: a blank line before an indented line keeps the option going', () => {
+    expect(reversibility('- **(a) x**\n\n  - Reversibility: one-way\n\n- **(b) z**\n\n  - Reversibility: cheap')).toBe('one-way')
+  })
+
+  test('a blank line before unindented prose ends the option, so prose after the list sets nothing', () => {
+    expect(reversibility('- **(a) x**\n\n  - Reversibility: cheap\n\nReversibility: one-way, as a one-way door.')).toBe('cheap')
+  })
+
   test('a body that states none: empty', () => {
     expect(reversibility(qs.length ? GRILL_ROUND_1 : '')).toBe('')
     expect(reversibility('Per worktree or per repo?')).toBe('')
