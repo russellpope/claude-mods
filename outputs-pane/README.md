@@ -154,6 +154,7 @@ If Rex can't say who owns the pane, the click opens your editor.
 - If another agent or program writes in the same directory while a `Bash` call runs, its files are listed too: the listing sees what changed, not who changed it.
 - A `Bash` call's listing finds files under the working directory and paths the command names in full. A file a command writes to a relative folder outside the working directory (`cd /tmp && ./build`), or into a named folder rather than a named file (`cp a.pdf ~/Desktop/`), is missed.
 - On Linux, GNU find compares times more finely than BSD find, so a file changed up to a second before a `Bash` call can be listed with it.
+- A command that saves a file by writing a new copy and renaming it over the old one (`sed -i`, many formatters) gives it a new birth time, so that file is marked new rather than changed.
 - A worktree just created from the default branch, with no commits of its own yet, counts as merged until its first commit: git can't tell it from one that was merged.
 - Files are sorted into sections by name alone, so an extensionless script (`bin/deploy`) goes under misc, and clicking it runs `miscOpener`, not your editor.
 - Colors are fixed hex values tuned for dark themes.
