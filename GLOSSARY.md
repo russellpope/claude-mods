@@ -9,7 +9,7 @@ A titled piece of work Claude posts for the owner to keep: a design, plan, diagr
 _Avoid_: output, document, note
 
 **Output**:
-A file Claude wrote or edited in a session, as outputs-pane lists it. An artifact is posted on purpose; an output is any file written.
+A file Claude wrote, edited or made with a shell command in a session, as outputs-pane lists it. An artifact is posted on purpose; an output is any file written.
 _Avoid_: artifact (for a written file)
 
 **Version**:
@@ -19,6 +19,24 @@ _Avoid_: revision, edit
 **Project history**:
 Every artifact posted for one repository, shared by all its worktrees and sessions.
 _Avoid_: archive, log, artifact store
+
+**Misc**:
+An output that is neither planning text nor code: a deck, a PDF, a video, an archive, a binary.
+_Avoid_: other, asset, artifact
+
+**Ship state**:
+What in a repository is not yet committed, pushed or cleaned up: the dirty count, ahead and behind, unpushed branches and merged worktrees.
+_Avoid_: git status, sync state
+
+## Agents
+
+**Errored**:
+A worker whose last turn ended on an API error and that is not working. Not a status of its own: the row keeps the status its multiplexer reports.
+_Avoid_: failed, crashed, blocked
+
+**Lead**:
+The session that spawned a team's workers and answers for them.
+_Avoid_: orchestrator, parent (a parent is any node's direct spawner)
 
 ## Exploring
 

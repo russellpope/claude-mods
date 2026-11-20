@@ -2,7 +2,7 @@
 
 Mods for [Claude Code](https://claude.com/claude-code): panes, status entries and hooks that run inside the Claude Code terminal UI. Each mod is a folder at the top of this repo, with its own README.
 
-> Mods use Claude Code's function-hooks plugin API, which is in early access and may change between releases. These were built on Claude Code 2.1.288 and tested on 2.1.326 (2026-11-17). explore requires 2.1.318 or later.
+> Mods use Claude Code's function-hooks plugin API, which is in early access and may change between releases. These were built on Claude Code 2.1.288 and tested on 2.1.327 (2026-11-19). explore requires 2.1.318 or later.
 
 ## Mods
 
@@ -46,7 +46,7 @@ To check that a mod loaded, start Claude with `claude --debug-file /tmp/claude.l
 ### If a mod doesn't load
 
 - **"hooks modules are turned off in this process"**: Claude Code caches a remote rollout switch for mods. Run any `claude` session with network access to refresh it. If the message keeps coming back, mods are turned off for your account.
-- Settings from a project's `.claude/settings.json` are ignored for `CLAUDE_CODE_PLUGIN_DIRS`. It has to be in `~/.claude/settings.json` or the process environment.
+- Settings from a project's `.claude/settings.json` are ignored for `CLAUDE_CODE_PLUGIN_DIRS`. It has to be in `~/.claude/settings.json` or the process environment. When both set it, the settings file wins; to try a different copy of a mod in one session, use `--plugin-dir`, which loads ahead of both.
 
 ## Mod layout
 

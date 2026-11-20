@@ -14,6 +14,13 @@ A pane for herdr and Rex users: the agents this Claude session spawned, the agen
 - **Dings**: herdr plays a sound when an agent's turn ends in a background tab (`working` → `done`) or it starts asking for input (`blocked`). This pane keeps dings only for this session's tree, including recorded descendants and adopted workers. The Dings section lists the ones that need you, newest first, each with its age and the pane's title at the time: a descendant asking, a lead whose title reads `DONE:`, or a worker whose lead has stopped. This session's own turns and unrelated sessions are left out, and an agent herdr has no name for shows its tab's label. Each one puts a `!` on its tree row until it is acknowledged: by its `✓` (you stay put), by pressing its name (you go to its pane), by `ack all`, or by the agent working again. Acknowledged, collapsed below, keeps the newest 10, along with the dings that never needed you, dim with the reason: a worker finishing while its lead runs, or a lead ending a turn without `DONE:`. Dings are seen only while this mod is polling: every 2 s with the pane open, every 10 s otherwise in a session that has spawned workers.
 - **Status line**: `tree 3● 1!` while the tree has live members, `1⚠` after it for errored rows, then `· 2 need you` while dings wait on you.
 
+## Settings
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `motion` | on | Set to `off` to keep the crab still. |
+| `continuePrompt` | `Continue your dispatch from where you stopped.` | The prompt an errored row's `continue` button sends. |
+
 ## For leads
 
 In a herdr or Rex pane, the mod gives the session a `team_status` tool, always loaded. It answers in plain text: a header with the counts, the dings that need you and the batch with its ETA, then one line per tree node, indented by depth, with name, role, status, ticket, model and effort (and what it was, after a change), context percent, time in the tree, a `DONE:` or `BLOCKED:` title and the pane id. An errored row gives its reason. `scope: "all"` lists every agent, grouped by repo, as the All view does. The tool refreshes first when its data is over 2 s old (after a refresh the multiplexer did not answer, it waits 2 s before asking again, and says how old its state is), reports what it sees, and returns: it never waits for a change and never sends anything to a pane. A lead calls it in place of `herdr pane read` or `sleep`.
