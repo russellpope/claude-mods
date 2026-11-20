@@ -8,8 +8,8 @@ Mods for [Claude Code](https://claude.com/claude-code): panes, status entries an
 
 | Mod | What it does |
 | --- | --- |
-| [outputs-pane](outputs-pane/) | Side pane listing the files Claude writes or edits, split into planning (markdown), code and scratch, with a filter. Click a file to open it in your editor. |
-| [agent-tree](agent-tree/) | Pane of the herdr and Rex agents this session spawned, and theirs: status, model, context, cost and ticket, with a global view and a crab. `/agent-tree` toggles it. |
+| [outputs-pane](outputs-pane/) | Side pane listing the files Claude writes, edits or makes with Bash, split into planning (markdown), code, misc (documents, media and other built files) and scratch, with a filter. Click a file to open it. A line under the title shows what in the repo is not yet shipped. |
+| [agent-tree](agent-tree/) | Pane of the herdr and Rex agents this session spawned, and theirs: status, model, context, cost and ticket, with a global view and a crab. Workers stopped by an API error get a `continue` button, a batch shows time left, and leads can call the `team_status` tool. `/agent-tree` toggles it. |
 | [kintsugi-runs](kintsugi-runs/) | Pane of this repo's kintsugi verification run: the stage pipeline, each stage's state, exit and time, and a timing bar that measures a long stage against its usual length. `/kintsugi-runs` toggles it. |
 | [artifacts](artifacts/) | Pane of the designs, plans and diagrams Claude posts with its `show` tool, and each project's history of them in `~/.claude/artifacts/`, with versions and a "keep in repo" button. `/artifacts-pane` toggles it. |
 | [explore](explore/) | Drawer above the prompt for one question of a grilling round: its options in a side fork of the conversation, follow-ups, and a `take` button that puts your pick into your reply. A hint button after a round opens it without touching your draft; `/explore 5` opens Q5. |
