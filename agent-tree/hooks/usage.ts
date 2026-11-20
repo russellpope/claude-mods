@@ -1,4 +1,4 @@
-import type { Usage } from '../types'
+import type { ModelChange, Usage } from '../types'
 
 export type RawUsage = {
   input_tokens?: number
@@ -53,28 +53,76 @@ export const emptyUsage = (): UsageAcc => ({ model: '', effort: '', contextToken
 
 const KEEP_IDS = 200
 
-type Line = { type?: string; isSidechain?: boolean; effort?: unknown; message?: { id?: string; model?: string; usage?: RawUsage } }
+type Line = {
+  type?: string
+  isSidechain?: boolean
+  effort?: unknown
+  timestamp?: string
+  isApiErrorMessage?: boolean
+  isMeta?: boolean
+  error?: unknown
+  apiErrorStatus?: unknown
+  message?: { id?: string; model?: string; usage?: RawUsage; content?: unknown }
+}
+
+/** Claude Code's model for a line it wrote itself, such as an API error: never the agent's model. */
+export const SYNTHETIC = '<synthetic>'
+
+// What a local command (`/model`, `! pwd`) writes as user lines: run in Claude Code, never sent to the agent.
+const LOCAL = /^\s*<(command-name|command-message|command-args|local-command-[a-z-]+|bash-input|bash-stdout|bash-stderr)>/
+
+const firstText = (content: unknown): string => {
+  if (typeof content === 'string') return content
+  const first: unknown = Array.isArray(content) ? content[0] : undefined
+  return first && typeof first === 'object' && typeof (first as { text?: unknown }).text === 'string' ? (first as { text: string }).text : ''
+}
+
+/**
+ * A line that shows the agent went on: a prompt sent to it, or its own answer. Not an isMeta line, a local
+ * command's lines, or a <synthetic> line Claude Code writes itself ('No response requested.').
+ */
+const movesOn = (o: Line): boolean =>
+  o.type === 'user' ? !o.isMeta && !LOCAL.test(firstText(o.message?.content)) : o.message?.model !== SYNTHETIC
+
+const timeOf = (t: unknown): number => {
+  const ms = typeof t === 'string' ? Date.parse(t) : NaN
+  return Number.isFinite(ms) ? ms : 0
+}
+
+/** A model or effort that differs from the one before: the one before, and when. A first model or an absent effort is no change. */
+export const changeOf = (prev: { model: string; effort: string }, model: string, effort: string, at: number): ModelChange | null =>
+  prev.model && (model !== prev.model || (effort && prev.effort && effort !== prev.effort)) ? { model: prev.model, effort: prev.effort, at } : null
 
 export const addTranscript = (acc: UsageAcc, text: string): UsageAcc => {
   const next: UsageAcc = { ...acc, ids: [...acc.ids], byId: { ...acc.byId } }
   for (const raw of text.split('\n')) {
-    if (!raw.includes('"usage"')) continue
+    // Assistant lines carry usage (an API error line too, all zeros). A user line matters only to clear an error.
+    if (!raw.includes('"usage"') && !(next.apiError && raw.includes('"type":"user"'))) continue
     let o: Line
     try {
       o = JSON.parse(raw) as Line
     } catch {
       continue
     }
+    if ((o.type !== 'assistant' && o.type !== 'user') || o.isSidechain) continue
+    if (o.type === 'assistant' && o.isApiErrorMessage === true) {
+      next.apiError = { reason: typeof o.error === 'string' && o.error ? o.error : 'unknown', status: typeof o.apiErrorStatus === 'number' ? o.apiErrorStatus : null, at: timeOf(o.timestamp) }
+      continue
+    }
+    if (movesOn(o)) delete next.apiError
     const u = o.message?.usage
-    if (o.type !== 'assistant' || o.isSidechain || !u) continue
+    if (o.type !== 'assistant' || !u || o.message?.model === SYNTHETIC) continue
     const model = o.message?.model || next.model
+    const effort = typeof o.effort === 'string' ? o.effort : next.effort
+    const change = changeOf(next, model, effort, timeOf(o.timestamp))
+    if (change) next.was = change
     const ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0)
     const cost = costOf(model, u)
     const cached = u.cache_read_input_tokens || 0
     const out = u.output_tokens || 0
     next.model = model
+    next.effort = effort
     next.contextTokens = ctx
-    if (typeof o.effort === 'string') next.effort = o.effort
     const id = o.message?.id ?? ''
     const prev = id ? next.byId[id] : undefined
     if (prev) {
@@ -104,6 +152,8 @@ export const toUsage = (acc: UsageAcc): Usage => ({
   cachedTokens: acc.cachedTokens,
   outputTokens: acc.outputTokens,
   costUsd: acc.costUsd,
+  ...(acc.was ? { was: acc.was } : {}),
+  ...(acc.apiError ? { apiError: acc.apiError } : {}),
 })
 
 export const projectDirName = (cwd: string): string => cwd.replace(/[^A-Za-z0-9]/g, '-')

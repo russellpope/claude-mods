@@ -185,3 +185,19 @@ export const focusArgvs = (target: HerdrAgent, client: string): string[][] => {
     ['rex', ...server, ...app, 'do', 'session.select', `session_id=${target.workspace}`, ...(target.tab ? [`window_id=${target.tab}`] : [])],
   ]
 }
+
+/**
+ * Typing one prompt into an agent and submitting it, by its own multiplexer: herdr's `agent prompt` submits;
+ * Rex sends the text into the block, then Enter. Empty when a Rex block's session is not known.
+ */
+export const promptArgvs = (target: HerdrAgent, text: string): string[][] => {
+  if (target.mux !== 'rex') return [['herdr', 'agent', 'prompt', target.pane, text]]
+  if (!target.workspace) return []
+  const server = target.server ? ['-S', target.server] : []
+  const at = ['-s', target.workspace, '-b', target.pane]
+  return [
+    // `--`: a prompt that starts with - is text, not a flag.
+    ['rex', ...server, 'send', ...at, '--', text],
+    ['rex', ...server, 'send-key', ...at, 'enter'],
+  ]
+}

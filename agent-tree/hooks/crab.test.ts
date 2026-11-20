@@ -54,3 +54,9 @@ describe('moodWord', () => {
     expect((['typing', 'review', 'blocked', 'asleep', 'party'] as const).map(moodWord)).toEqual(['typing', 'reviewing', 'blocked', 'asleep', 'batch done'])
   })
 })
+
+describe('moodOf: errored rows', () => {
+  test('a live row whose turn died on an API error sweats like a blocked one', () => {
+    expect(moodOf([node('working'), { ...node('idle'), apiError: { reason: 'server_error', status: 529, at: 0 } }], null)).toBe('blocked')
+  })
+})

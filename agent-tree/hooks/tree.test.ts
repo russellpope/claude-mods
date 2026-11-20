@@ -181,3 +181,14 @@ describe('workspace inference (a lead without the mod still shows its workers)',
     ])
   })
 })
+
+describe('partition: errored rows (fix r1 M6)', () => {
+  test('an errored row is live: it stays in the tree whatever its title says, and keeps its parent there', () => {
+    const edges = [edge('R', 'L', 1), edge('L', 'W1', 2)]
+    const { nodes } = build(edges, [ag('L', { status: 'idle', title: 'DONE: x' }), ag('W1', { status: 'idle', title: 'DONE: y' })])
+    const err = { reason: 'server_error', status: 529, at: 0 }
+    const marked = nodes.map(n => (n.pane === 'W1' ? { ...n, apiError: err } : n))
+    const { tree, finished } = partition(marked)
+    expect([tree.map(n => n.pane), finished.map(n => n.pane)]).toEqual([['L', 'W1'], []])
+  })
+})

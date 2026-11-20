@@ -1,6 +1,6 @@
-import type { HerdrAgent, NodeStatus, Panel, TreeNode, Usage } from '../types'
+import type { ApiError, HerdrAgent, ModelChange, NodeStatus, Panel, TreeNode, Usage } from '../types'
 import { repoName } from './tickets'
-import { isLive } from './tree'
+import { isLiveNode } from './tree'
 import { fmtCost, fmtTime, fmtTokens, modelName, windowOf } from './usage'
 
 export const STATUS_GLYPH: Record<NodeStatus, string> = { working: '●', idle: '◌', blocked: '!', done: '✓', gone: '✗' }
@@ -48,14 +48,25 @@ export const tokenLine = (t: Pick<Totals, 'tokens' | 'cached' | 'output'>): stri
 
 export const needText = (n: number): string => `${n} need${n === 1 ? 's' : ''} you`
 
+/** An errored row counts as errored, not also as blocked or idle. */
 export const statusLine = (nodes: TreeNode[], needYou = 0): string | undefined => {
-  const live = nodes.filter(n => isLive(n.status))
+  const live = nodes.filter(isLiveNode)
   const need = needYou ? needText(needYou) : ''
   if (!live.length) return need || undefined
   const working = live.filter(n => n.status === 'working').length
-  const blocked = live.filter(n => n.status === 'blocked').length
-  return `tree ${working}●${blocked ? ` ${blocked}!` : ''}${need ? ` · ${need}` : ''}`
+  const blocked = live.filter(n => n.status === 'blocked' && !n.apiError).length
+  const errored = live.filter(n => n.apiError).length
+  return `tree ${working}●${blocked ? ` ${blocked}!` : ''}${errored ? ` ${errored}⚠` : ''}${need ? ` · ${need}` : ''}`
 }
+
+export const ERROR_GLYPH = '⚠'
+
+/** `API error: overloaded (529)`; no code when the line had none. */
+export const errorNote = (e: ApiError): string => `API error: ${e.reason}${e.status === null ? '' : ` (${e.status})`}`
+
+const labelOf = (model: string, effort: string): string => (effort ? `${modelName(model)}·${effort}` : modelName(model))
+
+export const wasText = (w: ModelChange): string => `was ${labelOf(w.model, w.effort)}`
 
 /** How long ago a ding was, in its largest whole unit. */
 export const ageText = (ms: number): string => {
@@ -80,15 +91,19 @@ export const dots = (pct: number, width: number): { filled: string; empty: strin
 /** How long a row has run. A row recorded after its pane closed was never seen running: no time. */
 export const spanText = (n: TreeNode): string => (n.status === 'gone' && n.lastSeen <= n.startedAt ? '—' : fmtTime(n.lastSeen - n.startedAt))
 
-export const modelLabel = (u: Usage | null): string => (!u || !u.model ? '' : u.effort ? `${modelName(u.model)}·${u.effort}` : modelName(u.model))
+export const modelLabel = (u: Usage | null): string => (!u || !u.model ? '' : labelOf(u.model, u.effort))
+
+/** The row's model cell: a `*` marks a model or effort that changed during the row's life. */
+export const modelCell = (u: Usage | null): string => `${modelLabel(u)}${u?.model && u.was ? '*' : ''}`
 
 export const countsLine = (nodes: TreeNode[]): string => {
   if (!nodes.length) return 'no workers yet'
   const count = (f: (n: TreeNode) => boolean) => nodes.filter(f).length
   const parts: [number, string][] = [
     [count(n => n.status === 'working'), 'working'],
-    [count(n => n.status === 'idle'), 'idle'],
-    [count(n => n.status === 'blocked'), 'blocked'],
+    [count(n => n.status === 'idle' && !n.apiError), 'idle'],
+    [count(n => n.status === 'blocked' && !n.apiError), 'blocked'],
+    [count(n => Boolean(n.apiError)), 'errored'],
     [count(n => n.status === 'done' || n.status === 'gone'), 'finished'],
   ]
   return parts
@@ -110,7 +125,7 @@ export const rowColumns = (nodes: TreeNode[], maxName: number): { name: number; 
   return {
     name: Math.min(maxName, widest(n => treePrefix(n).length + n.name.length)),
     harness: widest(n => n.harness.length),
-    model: widest(n => modelLabel(n.usage).length),
+    model: widest(n => modelCell(n.usage).length),
     cost: widest(n => costText(n.usage).length),
   }
 }

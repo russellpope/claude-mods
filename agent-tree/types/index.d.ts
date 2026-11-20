@@ -51,7 +51,16 @@ export type Usage = {
   outputTokens: number
   /** null where no price is known: codex bills against a ChatGPT plan. */
   costUsd: number | null
+  /** The model and effort before the newest change, and when it changed (the line's timestamp). Absent: no change seen. */
+  was?: ModelChange
+  /** Set while the newest main-chain line of a Claude transcript is an API error line. */
+  apiError?: ApiError
 }
+
+export type ModelChange = { model: string; effort: string; at: number }
+
+/** A turn that ended on an API error: the transcript line's `error`, `apiErrorStatus` (null when absent) and timestamp. */
+export type ApiError = { reason: string; status: number | null; at: number }
 
 export type TreeNode = {
   mux?: 'herdr' | 'rex'
@@ -74,6 +83,8 @@ export type TreeNode = {
   inferred?: boolean
   /** The herdr terminal an inferred node was seen on: a new occupant of the pane is a new node. */
   terminal?: string
+  /** Errored: its transcript ends on an API error and the multiplexer does not report it working. Not a NodeStatus. */
+  apiError?: ApiError
 }
 
 export type BatchCounts = { stamp: string; fixed: number; inProgress: number; open: number; total: number }
@@ -87,6 +98,8 @@ export type Snapshot = {
   repos: Record<string, string>
   batch: BatchCounts | null
   error: string
+  /** When the multiplexer last answered; absent in snapshots kept from before it was kept, or before any answer. */
+  seenAt?: number
 }
 
 export type Panel = {
@@ -118,6 +131,9 @@ export type Ding = {
   isOpen: boolean
 }
 
+/** A batch's observed pace: when this mod first saw it, the highest fixed count seen, and when each rise above it was seen. */
+export type Pace = { stamp: string; firstSeen: number; high: number; closes: number[] }
+
 export type InProcRun = {
   id: string
   agentId?: string
@@ -141,6 +157,12 @@ declare module 'claude-code' {
       inproc: InProcRun[]
       edgeCount: number
       dings: Ding[]
+      /** Each batch's pace, the most recently seen last. A lone record or null is state kept from before the book. */
+      pace: Pace[] | Pace | null
     }
+  }
+  /** The mod's own tool, so `{ tool: "mcp__agent-tree__team_status" }` names one whatever MCP servers the types were saved with. */
+  interface McpToolInputs {
+    'mcp__agent-tree__team_status': { scope?: 'tree' | 'all' }
   }
 }

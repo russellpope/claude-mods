@@ -59,3 +59,17 @@ describe('addRollout', () => {
     expect(codexUsage(addRollout(addRollout(emptyUsage(), a), b))).toEqual(codexUsage(addRollout(emptyUsage(), a + b)))
   })
 })
+
+describe('addRollout: model changes', () => {
+  const turnAt = (model: string, effort: string | null, timestamp: string) => JSON.stringify({ timestamp, type: 'turn_context', payload: { model, effort, cwd: '/w' } })
+
+  test('a turn on another model or effort keeps the one before and when it changed', () => {
+    const text = [turnAt('gpt-6.1-sol', 'high', '2026-11-18T10:00:00.000Z'), turnAt('gpt-6.1-sol', 'xhigh', '2026-11-18T11:00:00.000Z'), ''].join('\n')
+    expect(codexUsage(addRollout(emptyUsage(), text)).was).toEqual({ model: 'gpt-6.1-sol', effort: 'high', at: Date.parse('2026-11-18T11:00:00.000Z') })
+  })
+
+  test('the first turn and a repeat are not changes', () => {
+    const text = [turnAt('gpt-6.1-sol', 'high', '2026-11-18T10:00:00.000Z'), turnAt('gpt-6.1-sol', 'high', '2026-11-18T11:00:00.000Z'), ''].join('\n')
+    expect(codexUsage(addRollout(emptyUsage(), text))).not.toHaveProperty('was')
+  })
+})
