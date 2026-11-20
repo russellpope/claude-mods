@@ -45,6 +45,82 @@ const BY_EXT: Record<string, Icon> = {
   pdf: { glyph: '', color: '#e06c75' },
 }
 
+// Built things that are neither plans nor code, by family: each gets its family's file glyph.
+const FAMILIES: [string[], Icon][] = [
+  [['pptx', 'ppt', 'key', 'odp'], { glyph: '', color: '#d24726' }],
+  [['docx', 'doc', 'pages', 'odt', 'rtf'], { glyph: '', color: '#2b579a' }],
+  [['xlsx', 'xls', 'numbers', 'ods'], { glyph: '', color: '#217346' }],
+  [['jpeg', 'gif', 'webp', 'heic', 'ico', 'bmp', 'tif', 'tiff', 'avif'], { glyph: '', color: '#a074c4' }],
+  [['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'], { glyph: '', color: '#fd971f' }],
+  [['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac', 'aiff'], { glyph: '', color: '#ee82ee' }],
+  [['zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'zst', '7z', 'rar', 'dmg', 'pkg'], { glyph: '', color: '#eca517' }],
+  [['ttf', 'otf', 'woff', 'woff2'], { glyph: '', color: '#c0c4cc' }],
+]
+for (const [exts, icon] of FAMILIES) for (const ext of exts) BY_EXT[ext] ??= icon
+
+// The known misc families, by extension: office files, PDFs, images, video, audio, archives and fonts. Only these
+// open with the misc opener, and only these pop the pane when a Bash call makes one. A file that is misc by
+// elimination (an extensionless binary or script, an unknown extension) opens in the editor, so a click never runs
+// a program.
+// Misc, with an archive's icon, but never handed to the opener and never popping the pane.
+const NEVER_OPENED = new Set(['dmg', 'pkg'])
+
+export const MISC_FAMILIES: Record<string, string[]> = {
+  office: [...(FAMILIES[0]?.[0] ?? []), ...(FAMILIES[1]?.[0] ?? []), ...(FAMILIES[2]?.[0] ?? []), 'csv'],
+  pdf: ['pdf'],
+  images: [...(FAMILIES[3]?.[0] ?? []), 'png', 'jpg', 'svg'],
+  video: FAMILIES[4]?.[0] ?? [],
+  audio: FAMILIES[5]?.[0] ?? [],
+  // Archives, but never disk images or installer packages: opening one mounts it or starts the Installer.
+  archives: (FAMILIES[6]?.[0] ?? []).filter(ext => !NEVER_OPENED.has(ext)),
+  fonts: FAMILIES[7]?.[0] ?? [],
+}
+const MISC_EXTS = new Set(Object.values(MISC_FAMILIES).flat())
+
+const extOf = (path: string) => {
+  const name = (path.split('/').pop() ?? path).toLowerCase()
+  const dot = name.lastIndexOf('.')
+
+  return dot > 0 ? name.slice(dot + 1) : ''
+}
+
+export const isMiscFamily = (path: string) => MISC_EXTS.has(extOf(path))
+
+// Code: source, config and markup extensions. Everything not code or planning goes to misc.
+const CODE_EXTS = new Set([
+  'rs', 'ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'py', 'pyi', 'go', 'rb', 'java', 'kt', 'kts', 'scala',
+  'swift', 'm', 'mm', 'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'cs', 'fs', 'php', 'pl', 'pm', 'lua', 'r', 'jl',
+  'dart', 'ex', 'exs', 'erl', 'hs', 'ml', 'mli', 'clj', 'cljs', 'elm', 'nim', 'zig', 'vue', 'svelte', 'astro',
+  'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd', 'nu', 'awk', 'sed',
+  'json', 'jsonc', 'json5', 'jsonl', 'toml', 'yaml', 'yml', 'ini', 'cfg', 'conf', 'properties', 'env', 'plist',
+  'lock', 'tf', 'hcl', 'nix', 'gradle', 'cmake', 'mk', 'kdl', 'proto', 'graphql', 'gql', 'sql', 'prisma',
+  'html', 'htm', 'xml', 'xsl', 'css', 'scss', 'sass', 'less', 'tex', 'rst', 'adoc', 'org',
+  'diff', 'patch', 'ipynb', 'd',
+  'mod', 'sum', 'work', 'bzl', 'bazel', 'erb', 'ejs', 'hbs', 'njk', 'jinja', 'j2', 'tmpl', 'vim', 'el', 'lisp',
+  'groovy', 'csproj', 'fsproj', 'sln', 'cabal', 'map',
+])
+// Code files with no extension, by name.
+const CODE_NAMES = new Set([
+  'makefile', 'gnumakefile', 'dockerfile', 'containerfile', 'justfile', 'rakefile', 'gemfile', 'procfile',
+  'vagrantfile', 'brewfile', 'podfile', 'jenkinsfile', 'caddyfile', 'license', 'licence', 'copying', 'readme',
+  'codeowners', 'owners', 'notice', 'authors', 'build', 'workspace', 'pipfile', 'tiltfile', 'earthfile', 'snakefile',
+  'meson',
+])
+
+// A known source, config or markup extension, a known extensionless name, or a dotfile. A name whose part before
+// the first dot is a known name is code too (Dockerfile.dev, Makefile.am, meson.build), unless its extension is a
+// known misc family (build.zip, license.pdf).
+export const isCode = (path: string) => {
+  const name = (path.split('/').pop() ?? path).toLowerCase()
+  if (CODE_NAMES.has(name) || name.startsWith('.')) return true
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return CODE_NAMES.has(name.replace(/[-_].*$/, ''))
+  if (CODE_EXTS.has(name.slice(dot + 1))) return true
+  if (MISC_EXTS.has(name.slice(dot + 1))) return false
+
+  return CODE_NAMES.has(name.slice(0, name.indexOf('.')))
+}
+
 export const iconFor = (path: string): Icon => {
   const name = (path.split('/').pop() ?? path).toLowerCase()
   if (BY_NAME[name]) return BY_NAME[name]
